@@ -1,5 +1,5 @@
 # BandwidthShaper
-- Version: 1.0
+- Version: 1.1
 - [App executable's icon source](https://vectorified.com/bandwidth-icon)
 - License: MIT License
 
@@ -109,3 +109,4 @@ If you do not always want to open an elevated command prompt and manually execut
 
 ## Changelog
 * 1.0: Initial version release
+* 1.1: Add some error check for the threads
