@@ -171,7 +171,7 @@ typedef struct {
 	volatile LONG tail;  // Atomic tail index
 } LockFreeQueue;
 
-// Lock-free queue for packet processing
+// Arguments that can be passed to threads
 typedef struct {
 	LockFreeQueue *queue;
 	PacketData *data;
