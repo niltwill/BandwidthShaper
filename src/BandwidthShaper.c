@@ -60,10 +60,9 @@ typedef struct {
 	double rate;              // rate in bytes per second
 	double max_tokens;        // maximum tokens (bucket size)
 	double tokens;            // current tokens
-	int buffer_size;          // Current buffer usage (in bytes, kept as int)
-	int max_buffer_size;      // Max buffer size (in bytes, enforced for shaping)
+	int buffer_size;          // current buffer usage (in bytes, kept as int)
 	DWORD last_checked;       // last time tokens were replenished (milliseconds)
-	CRITICAL_SECTION lock;    // Mutex for thread safety
+	CRITICAL_SECTION lock;    // mutex for thread safety
 } TokenBucket;
 
 // Hash Map for Target PIDs
@@ -153,7 +152,7 @@ typedef struct {
 // The parameters for processes
 typedef struct {
 	PIDEntry *pid_map;
-	ConnectionRate *connection_rates;  // Track rate-limited connections
+	ConnectionRate *connection_rates;
 	CRITICAL_SECTION rate_limit_lock;
 	char *process_list;
 	unsigned int packet_threshold;
@@ -352,7 +351,7 @@ DWORD get_packet_pid(const WINDIVERT_ADDRESS *addr, const char *packet, UINT pac
 	UINT src_port = 0, dest_port = 0;
 	BYTE protocol = 0;
 
-	// Use the helper function to extract protocol and ports
+	// Use this helper function to extract protocol and ports
 	if (!get_packet_protocol_and_port(packet, packet_len, &src_port, &dest_port, &protocol)) {
 		return 0; // Invalid or non-TCP/UDP packet
 	}
@@ -360,9 +359,9 @@ DWORD get_packet_pid(const WINDIVERT_ADDRESS *addr, const char *packet, UINT pac
 	// Based on protocol, determine PID using src_port or dest_port
 	DWORD pid = 0;
 	if (protocol == IPPROTO_TCP) {
-		pid = find_tcp_pid(dest_port); // Use dest_port for TCP (or src_port, depending on your logic)
+		pid = find_tcp_pid(dest_port); // Use dest_port for TCP
 	} else if (protocol == IPPROTO_UDP) {
-		pid = find_udp_pid(dest_port); // Use dest_port for UDP (or src_port, depending on your logic)
+		pid = find_udp_pid(dest_port); // Use dest_port for UDP
 	}
 
 	return pid;  // Return the PID
@@ -407,14 +406,23 @@ bool check_packet_rate_limit(ProcessParams *processparams, const char *ip, UINT 
 ///
 
 // Function to initialize the token bucket
-void token_bucket_init(TokenBucket *bucket, double rate, int max_tokens) {
+bool token_bucket_init(TokenBucket *bucket, double rate, int max_tokens) {
+    if (!bucket) {
+        return false;  // Prevent NULL pointer dereference
+    }
+
 	bucket->rate = rate;  // Set the rate in bytes per second (double for precision)
 	bucket->max_tokens = max_tokens;
 	bucket->tokens = max_tokens;  // Start with a full bucket
 	bucket->buffer_size = 0;  // Initially, the buffer is empty
 	bucket->last_checked = GetTickCount64();  // Get current time
 
-	InitializeCriticalSection(&bucket->lock);  // Initialize the mutex
+    // Initialize critical section with spin count for better performance
+    if (!InitializeCriticalSectionAndSpinCount(&bucket->lock, 4000)) {
+        return false;  // Return failure if initialization fails
+    }
+
+    return true;  // Successfully initialized
 }
 
 // Function to update the token bucket (replenish tokens based on time)
@@ -521,9 +529,9 @@ void reinject_packet(HANDLE handle, char *packet, UINT packet_len, WINDIVERT_ADD
 		packet_len,
 		&send_len,					 // pSendLen
 		0,							 // flags
-		addr,						  // pAddr
+		addr,						 // pAddr
 		sizeof(WINDIVERT_ADDRESS),	 // addrLen
-		&send_overlap				  // lpOverlapped
+		&send_overlap				 // lpOverlapped
 	);
 
 	if (!send_status) {
@@ -666,8 +674,8 @@ void list_network_interfaces() {
 	PIP_ADAPTER_ADDRESSES adapter = adapter_addresses;
 	int index = 1;  // Start index numbering from 1
 	while (adapter) {
-		printf("Interface Index: %u\n", adapter->IfIndex);  // Display the interface index
-		printf("Interface Name: %s\n", adapter->AdapterName);  // Display the interface name
+		printf("Interface Index: %u\n", adapter->IfIndex);           // Display the interface index
+		printf("Interface Name: %s\n", adapter->AdapterName);        // Display the interface name
 		printf("Adapter Description: %ws\n", adapter->Description);  // Description of the adapter
 
 		adapter = adapter->Next;
@@ -733,7 +741,7 @@ int parse_process_update_interval(const char *input, ProcessParams *processparam
 	
 	// Handle the special case where input is "0"
 	if (strcmp(input, "0") == 0) {
-		processparams->packet_threshold = 0; // Disable packet-based updates
+		processparams->packet_threshold = 0;  // Disable packet-based updates
 		processparams->time_threshold_ms = 0; // Disable time-based updates
 		return 0; // Success
 	}
@@ -745,7 +753,7 @@ int parse_process_update_interval(const char *input, ProcessParams *processparam
 
 	char value_str[MAX_INTERVAL_STR_LEN];
 	strncpy(value_str, input, len - 1); // Extract the numeric part
-	value_str[len - 1] = '\0';		 // Null-terminate
+	value_str[len - 1] = '\0';		    // Null-terminate
 
 	if (!isdigit(value_str[0])) {
 		if (!ERRORS) { fprintf(stderr, "Error: Invalid numeric value for --process-update-interval.\n"); }
@@ -792,7 +800,7 @@ double parse_rate_with_units(const char *rate_str) {
 		} else if (strcmp(unit, "Gb") == 0) {	 // Gigabits
 			return value * 1000000000.0 / 8.0;
 		} else if (unit[0] == '\0') {			 // No unit specified
-			return value * 1000.0;				// Default to kilobytes
+			return value * 1000.0;				 // Default to kilobytes
 		} else {
 			if (!ERRORS) { fprintf(stderr, "Invalid unit '%s' in rate '%s'. Defaulting to kilobytes.\n", unit, rate_str); }
 			return value * 1000.0; // Default to kilobytes
@@ -951,15 +959,16 @@ void non_blocking_delay(int delay_ms) {
 ///
 
 // Initialize lock-free queue
-void init_queue(LockFreeQueue *queue, size_t capacity) {
+bool init_queue(LockFreeQueue *queue, size_t capacity) {
 	queue->queue = (PacketData*)malloc(sizeof(PacketData) * capacity);
 	if (!queue->queue) {
 		if (!ERRORS) { fprintf(stderr, "Memory allocation failed for queue.\n"); }
-		exit(EXIT_FAILURE);
+		return false; // Failed, we skip running any further
 	}
 	queue->capacity = capacity;
 	queue->head = 0;
 	queue->tail = 0;
+	return true; // It's alright, we're ready to rock
 }
 
 // Enqueue a packet (returns false if full)
@@ -1050,7 +1059,6 @@ DWORD WINAPI capture_packets(LPVOID arg) {
 	}
 
 	// Capture loop - check atomic flag
-	//while (InterlockedCompareExchange(&running, 1, 1) == 1) {
 	while (InterlockedOr(&running, 0)) {
 		// Capture packet
 		if (!capture_packet(data.handle, data.packet, params->max_buffer_size, &data.addr, &data.packet_len)) {
@@ -1168,12 +1176,6 @@ DWORD WINAPI process_packets(LPVOID arg) {
 			if (DEBUG) { printf("Rate before update: %.2f\n", bucket->rate); }
 			token_bucket_update(bucket);
 
-			// Check if buffer usage is within limits
-			//if (bucket->buffer_size + data.packet_len > bucket->max_tokens) {
-			//	free(data.packet);
-			//	continue;
-			//}
-
 			if (DEBUG) { printf("Bucket Rate: %.2f, Tokens Available: %.2f\n", bucket->rate, bucket->tokens); }
 
 			// Consume tokens from the bucket (if enough tokens available)
@@ -1194,16 +1196,12 @@ DWORD WINAPI process_packets(LPVOID arg) {
 				free(data.packet);
 				continue;
 			}
-
-			// Update the buffer size (add the packet size)
-			//bucket->buffer_size += data.packet_len;
 			
 			if (DEBUG) { printf("Tokens remaining after consumption: %.2f\n", bucket->tokens); }
 		}
 
 		// Simulate packet loss
 		if (should_drop_packet(data.handle, data.packet, data.packet_len, data.addr, params->packet_loss)) {
-			//bucket->buffer_size -= data.packet_len;  // Undo buffer update if dropping the packet
 			free(data.packet);
 			continue;
 		}
@@ -1216,9 +1214,6 @@ DWORD WINAPI process_packets(LPVOID arg) {
 		// Reinject the processed packet
 		if (DEBUG) { printf("Reinjecting packet of size %d\n", data.packet_len); }
 		reinject_packet(data.handle, data.packet, data.packet_len, &data.addr);
-
-		// Update buffer size after reinjecting the packet
-		//bucket->buffer_size -= data.packet_len;
 
 		// Cleanup
 		free(data.packet);
@@ -1308,15 +1303,15 @@ BOOL ctrl_handler(DWORD fdwCtrlType) {
 // Function to get the program's name without the .exe extension
 const char *get_program_name(const char *path) {
 	const char *name = strrchr(path, '\\'); // Look for last backslash (Windows path)
-	if (!name) name = strrchr(path, '/');  // Look for last slash (POSIX path)
-	if (name) name++;					  // Skip the slash
-	else name = path;					  // No slashes, use the whole path
+	if (!name) name = strrchr(path, '/');   // Look for last slash (POSIX path)
+	if (name) name++;					    // Skip the slash
+	else name = path;					    // No slashes, use the whole path
 
 	// Remove the ".exe" extension if present
 	char *ext = strstr(name, ".exe");
 	if (ext && ext == name + strlen(name) - 4) { // Ensure ".exe" is at the end
-		static char buffer[MAX_PATH];		   // Static buffer for the program name
-		strncpy(buffer, name, ext - name);	  // Copy without ".exe"
+		static char buffer[MAX_PATH];		     // Static buffer for the program name
+		strncpy(buffer, name, ext - name);	     // Copy without ".exe"
 		buffer[ext - name] = '\0';
 		return buffer;
 	}
@@ -1617,7 +1612,9 @@ int main(int argc, char *argv[]) {
 
 	// Initialize lock-free queue
 	LockFreeQueue queue;
-	init_queue(&queue, 1024);
+	if (!init_queue(&queue, 1024)) {
+		goto cleanup_final2;
+	}
 
 	// Initialize the argument structure for threads
 	ThreadArgs args = {
@@ -1627,44 +1624,73 @@ int main(int argc, char *argv[]) {
 	};
 
 	// Initialize token buckets
-	token_bucket_init(&args.download_bucket, params.download_rate, params.download_buffer_size);
-	token_bucket_init(&args.upload_bucket, params.upload_rate, params.upload_buffer_size);
-	
-	// Initialize mutex for rate limit
-	InitializeCriticalSection(&processparams.rate_limit_lock);
+	if (!token_bucket_init(&args.download_bucket, params.download_rate, params.download_buffer_size) ||
+		!token_bucket_init(&args.upload_bucket, params.upload_rate, params.upload_buffer_size)) {
+		if (!ERRORS) { fprintf(stderr, "Failed to initialize token buckets.\n"); }
+		goto cleanup_final;
+	}
+
+    // Initialize mutex for rate limit with error handling
+    if (!InitializeCriticalSectionAndSpinCount(&processparams.rate_limit_lock, 4000)) {
+        if (!ERRORS) { fprintf(stderr, "Failed to initialize critical section.\n"); }
+        goto cleanup_final;
+    }
 
 	// Create threads using Windows API
 	HANDLE capture_thread = CreateThread(NULL, 0, capture_packets, &args, 0, NULL);
 	HANDLE process_thread = CreateThread(NULL, 0, process_packets, &args, 0, NULL);
 	HANDLE exit_thread = CreateThread(NULL, 0, exit_key, &args, 0, NULL);
+	
+    // Check if any thread creation failed
+	if (!capture_thread) {
+		if (!ERRORS) { fprintf(stderr, "Failed to create capture thread.\n"); }
+		goto cleanup_threads;
+	}
+	if (!process_thread) {
+		if (!ERRORS) { fprintf(stderr, "Failed to create process thread.\n"); }
+		goto cleanup_threads;
+	}
+	if (!exit_thread) {
+		if (!ERRORS) { fprintf(stderr, "Failed to create exit thread.\n"); }
+		goto cleanup_threads;
+	}
 
 	// Ensure all threads exit before cleanup
 	WaitForSingleObject(exit_thread, INFINITE);
 	WaitForSingleObject(capture_thread, INFINITE);
 	WaitForSingleObject(process_thread, INFINITE);
 
-	// Clean up
-	CloseHandle(capture_thread);
-	CloseHandle(process_thread);
-	CloseHandle(exit_thread);
 
-	// Destroy resources
-	token_bucket_destroy(&args.download_bucket);
-	token_bucket_destroy(&args.upload_bucket);
-	destroy_queue(&queue);
-	
-	// Destroy mutex for rate limit
-	DeleteCriticalSection(&processparams.rate_limit_lock);
+	cleanup_threads:
+		// Clean up handles if they were successfully created
+		if (capture_thread) CloseHandle(capture_thread);
+		if (process_thread) CloseHandle(process_thread);
+		if (exit_thread) CloseHandle(exit_thread);
 
-	WSACleanup();
-	free(params.nic_indices);
+		// Destroy mutex for rate limit
+		DeleteCriticalSection(&processparams.rate_limit_lock);
 
-	if (processparams.process_list != NULL) {
-		free_pid_map(processparams.pid_map);
-	}
 
-	// This closes the WinDivert service before exit
-	stop_windivert();
+	cleanup_final:
+		// Destroy token buckets
+		token_bucket_destroy(&args.download_bucket);
+		token_bucket_destroy(&args.upload_bucket);
 
-	return EXIT_SUCCESS;
+
+	cleanup_final2:
+		// Destroy queue
+		destroy_queue(&queue);
+
+		// Other cleanup
+		WSACleanup();
+		free(params.nic_indices);
+
+		if (processparams.process_list != NULL) {
+			free_pid_map(processparams.pid_map);
+		}
+
+		// This closes the WinDivert service before exit
+		stop_windivert();
+
+		return EXIT_SUCCESS;
 }
