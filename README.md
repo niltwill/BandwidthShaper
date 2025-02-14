@@ -45,10 +45,10 @@ Options:
   -D, --download-buffer <bytes>                Maximum download buffer size in bytes (default: 150000)
   -U, --upload-buffer <bytes>                  Maximum upload buffer size in bytes (default: 150000)
   -b, --packet-buffer <bytes>                  Maximum packet buffer size in bytes (default: 65535)
-  -L, --latency <ms>                           Set the latency in milliseconds (default: 0 = no latency)
-  -m, --packet-loss <float>                    Set the packet loss in percentage (default: 0.00 = no loss)
   -t, --tcp-limit <NUM>                        Maximum limit of active TCP connections (default: 0 = unlimited)
   -r, --udp-limit <NUM>                        Maximum limit of active UDP connections (default: 0 = unlimited)
+  -L, --latency <ms>                           Set the latency in milliseconds (default: 0 = no latency)
+  -m, --packet-loss <float>                    Set the packet loss in percentage (default: 0.00 = no loss)
   -n, --nic <interface_index>                  Throttle traffic for the specified network interfaces (comma-separated)
   -l, --list-nics                              List all available network interfaces
   -d, --debug                                  Display more informational messages (in case of issues)
