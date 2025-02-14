@@ -17,6 +17,7 @@
 // Define statements
 #define WIN32_LEAN_AND_MEAN
 #define MAX_INTERVAL_STR_LEN 32
+#define REINJECT_FLAG 0xDEADBEEF         // Unique flag to mark reinjected packets
 #define INIT_PACKET_BUFFER 65535		 // Initial packet buffer size in bytes
 #define DEFAULT_MAX_BUFFER 75000		 // Default max buffer size in bytes
 #define DEFAULT_DL_BUFFER 150000		 // Default download buffer size in bytes
@@ -50,6 +51,9 @@
 
 // Global atomic flag for controlling the loop in multiple threads
 volatile LONG running = 1;
+
+// PID thread specific flag
+volatile LONG pid_thread_running = 1;
 
 ///
 /// TYPEDEF STUFF
@@ -131,6 +135,7 @@ typedef struct {
 	WINDIVERT_ADDRESS addr;
 	char *packet;
 	UINT packet_len;
+	int requeue_attempts; // Track requeues
 } PacketData;
 
 // The main parameters for throttling
@@ -164,10 +169,10 @@ typedef struct {
 
 // Lock-Free Queue Structure
 typedef struct {
-	PacketData *queue;   // Preallocated ring buffer
-	size_t capacity;     // Total queue size
-	volatile LONG head;  // Atomic head index
-	volatile LONG tail;  // Atomic tail index
+	PacketData *queue;
+    LONG head, tail;
+    LONG size;
+    size_t capacity;
 } LockFreeQueue;
 
 // Arguments that can be passed to threads
@@ -284,7 +289,7 @@ void get_dest_ip(const WINDIVERT_ADDRESS *addr, char *ip_str) {
 }
 
 // Helper function to extract the protocol and port information from the packet
-int get_packet_protocol_and_port(const char *packet, UINT packet_len, UINT *src_port, UINT *dest_port, BYTE *protocol) {
+int get_packet_protocol_and_port(const char *packet, unsigned int packet_len, UINT *src_port, UINT *dest_port, BYTE *protocol) {
 	// Check if it's an IPv4 or IPv6 packet
 	if (packet_len < sizeof(IPV4_HEADER) && packet_len < sizeof(IPV6_HEADER)) {
 		return 0; // Invalid packet size
@@ -347,7 +352,7 @@ int get_packet_protocol_and_port(const char *packet, UINT packet_len, UINT *src_
 }
 
 // Function to get the PID of a packet
-DWORD get_packet_pid(const WINDIVERT_ADDRESS *addr, const char *packet, UINT packet_len) {
+DWORD get_packet_pid(const WINDIVERT_ADDRESS *addr, const char *packet, unsigned int packet_len) {
 	UINT src_port = 0, dest_port = 0;
 	BYTE protocol = 0;
 
@@ -433,20 +438,20 @@ void token_bucket_update(TokenBucket *bucket) {
 	// Lock the bucket before making changes
 	EnterCriticalSection(&bucket->lock);
 
-	if (DEBUG) { printf("Bucket Rate: %.2f, Elapsed time: %lu ms\n", bucket->rate, elapsed); }
+	if (DEBUG) { printf("Debug: Bucket Rate: %.2f, Elapsed time: %lu ms\n", bucket->rate, elapsed); }
 
 	// Replenish tokens based on elapsed time and rate (this will work with fractional tokens)
 	if (elapsed > 0 && bucket->rate > 0) {
 		double tokens_to_add = bucket->rate * (elapsed / 1000.0);
-		if (DEBUG) { printf("Tokens to add: %.2f\n", tokens_to_add); }
+		if (DEBUG) { printf("Debug: Tokens to add: %.2f\n", tokens_to_add); }
 		bucket->tokens = fmin(bucket->tokens + tokens_to_add, bucket->max_tokens);
 	} else {
-		if (DEBUG) { printf("Skipping token addition due to zero elapsed time or zero rate.\n"); }
+		if (DEBUG) { printf("Debug: Skipping token addition due to zero elapsed time or zero rate.\n"); }
 	}
 
 	bucket->last_checked = now;  // Update last checked time
 	
-	if (DEBUG) { printf("Tokens in bucket after update: %.2f, Max tokens: %f\n", bucket->tokens, bucket->max_tokens); }
+	if (DEBUG) { printf("Debug: Tokens in bucket after update: %.2f, Max tokens: %f\n", bucket->tokens, bucket->max_tokens); }
 
 	// Unlock the bucket after updating
 	LeaveCriticalSection(&bucket->lock);
@@ -518,7 +523,7 @@ BOOL capture_packet(HANDLE handle, char *packet, UINT packet_size, WINDIVERT_ADD
 }
 
 // Function to reinject the packet into the network
-void reinject_packet(HANDLE handle, char *packet, UINT packet_len, WINDIVERT_ADDRESS *addr) {
+void reinject_packet(HANDLE handle, char *packet, unsigned int packet_len, WINDIVERT_ADDRESS *addr) {
 	OVERLAPPED send_overlap = {0};
 	send_overlap.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 
@@ -527,11 +532,11 @@ void reinject_packet(HANDLE handle, char *packet, UINT packet_len, WINDIVERT_ADD
 		handle,
 		packet,
 		packet_len,
-		&send_len,					 // pSendLen
-		0,							 // flags
-		addr,						 // pAddr
-		sizeof(WINDIVERT_ADDRESS),	 // addrLen
-		&send_overlap				 // lpOverlapped
+		&send_len,                   // pSendLen
+		0,                           // flags
+		addr,                        // pAddr
+		sizeof(WINDIVERT_ADDRESS),   // addrLen
+		&send_overlap                // lpOverlapped
 	);
 
 	if (!send_status) {
@@ -551,6 +556,40 @@ void reinject_packet(HANDLE handle, char *packet, UINT packet_len, WINDIVERT_ADD
 	CloseHandle(send_overlap.hEvent);
 }
 
+// Function to check if the packet is reinjected
+int is_reinjected_packet(const uint8_t *packet, unsigned int len) {
+    if (len < sizeof(uint32_t)) return 0;
+    uint32_t *flag = (uint32_t *)(packet + len - sizeof(uint32_t));
+    return (*flag == REINJECT_FLAG);
+}
+
+// Function to mark the packet as reinjected
+uint8_t *mark_packet_as_reinjected(uint8_t *packet, unsigned int len, unsigned int *new_len) {
+    *new_len = len + sizeof(uint32_t);  // Increase size to accommodate flag
+
+    // Allocate new memory for packet + flag
+	uint8_t *temp = realloc(packet, *new_len);
+	if (!temp) return packet;  // Return original if allocation fails
+
+    // Append the flag at the end
+    uint32_t *flag = (uint32_t *)(temp + len);
+    *flag = REINJECT_FLAG;
+
+    return temp;
+}
+
+// Function to strip the flag when handling the packet
+uint8_t *strip_reinject_flag(uint8_t *packet, unsigned int *len) {
+    if (*len < sizeof(uint32_t)) return packet;  // Safety check: packet too small
+
+    uint32_t *flag = (uint32_t *)(packet + *len - sizeof(uint32_t));
+    if (*flag == REINJECT_FLAG) {
+        *len -= sizeof(uint32_t);  // Reduce the effective length by 4 bytes
+    }
+
+    return packet;  // Return the same pointer with the new length
+}
+
 // Function to add a PID to the hash map
 void add_pid_to_map(PIDEntry **pid_map, int pid) {
 	PIDEntry *entry = malloc(sizeof(PIDEntry));
@@ -563,7 +602,7 @@ void add_pid_to_map(PIDEntry **pid_map, int pid) {
 }
 
 // Function to check if a PID exists in the hash map
-int is_pid_in_map(PIDEntry *pid_map, int pid) {
+int is_pid_in_map(PIDEntry *pid_map, unsigned int pid) {
 	PIDEntry *entry;
 	HASH_FIND_INT(pid_map, &pid, entry);
 	return entry != NULL;
@@ -844,17 +883,18 @@ int get_process_name_from_pid(DWORD pid, char *process_name, size_t name_size) {
 }
 
 // Function to decide if a packet should be dropped due to packet loss
-bool should_drop_packet(HANDLE handle, char *packet, UINT packet_len, WINDIVERT_ADDRESS addr, float packet_loss) {
+bool should_drop_packet(HANDLE handle, char *packet, unsigned int packet_len, WINDIVERT_ADDRESS addr, float packet_loss) {
 	if (packet_loss > 0.00f) {
 		float rand_value = (float)rand() / (float)RAND_MAX;  // Generate a random float between 0.0 and 1.0
 		if (rand_value < (packet_loss / 100.0f)) {
-			if (DEBUG) { printf("Dropped packet to simulate loss (%.2f%%)\n", packet_loss); }
+			if (DEBUG) { printf("Debug: Dropped packet to simulate loss (%.2f%%)\n", packet_loss); }
 			return true;  // Drop the packet
 		}
 	}
 	return false;  // No packet loss, process normally
 }
 
+// Function to check if a PID exists
 bool is_process_alive(int pid) {
     HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     if (hProcess) {
@@ -868,6 +908,7 @@ bool is_process_alive(int pid) {
     return false;
 }
 
+// Function to update the PIDs
 void update_pid_map(ProcessParams *processparams) {
 	if (!processparams->process_list) return;
 
@@ -885,11 +926,12 @@ void update_pid_map(ProcessParams *processparams) {
 	if (!processparams->needs_update) return;
 	processparams->needs_update = false;
 
-	// Store existing PIDs for quick lookup
+	// Remove stale PIDs (only dead ones)
     PIDEntry *entry, *tmp;
     UT_hash_handle *hh;
     HASH_ITER(hh, processparams->pid_map, entry, tmp) {
         if (!is_process_alive(entry->pid)) {
+			if (!QUIET) { printf("Stale PID %u was removed.\n", entry->pid); }
             HASH_DEL(processparams->pid_map, entry);
             free(entry);
         }
@@ -960,68 +1002,87 @@ void non_blocking_delay(int delay_ms) {
 
 // Initialize lock-free queue
 bool init_queue(LockFreeQueue *queue, size_t capacity) {
-	queue->queue = (PacketData*)malloc(sizeof(PacketData) * capacity);
-	if (!queue->queue) {
-		if (!ERRORS) { fprintf(stderr, "Memory allocation failed for queue.\n"); }
-		return false; // Failed, we skip running any further
-	}
-	queue->capacity = capacity;
-	queue->head = 0;
-	queue->tail = 0;
-	return true; // It's alright, we're ready to rock
+    queue->queue = (PacketData*)malloc(sizeof(PacketData) * capacity);
+    if (!queue->queue) {
+        if (!ERRORS) { fprintf(stderr, "Memory allocation failed for queue.\n"); }
+        return false;
+    }
+    queue->capacity = capacity;
+    queue->head = 0;
+    queue->tail = 0;
+    queue->size = 0;
+    return true;
 }
 
 // Enqueue a packet (returns false if full)
 bool enqueue(LockFreeQueue *queue, PacketData *data) {
-	LONG tail = queue->tail;
-	LONG next = (tail + 1) % queue->capacity;
+    LONG size = InterlockedOr(&queue->size, 0);  // Read size atomically
+    if (size >= queue->capacity) {
+        return false;  // Queue full
+    }
 
-	if (next == queue->head) {
-		return false; // Queue is full
-	}
+    LONG tail = queue->tail;
+    LONG next = (tail + 1) % queue->capacity;
 
-	// Copy metadata (handle, addr, packet length)
-	queue->queue[tail] = *data;
+    if (next == queue->head) {
+        return false; // Queue full (redundant check for safety)
+    }
 
-	// Allocate memory and copy packet data
-	queue->queue[tail].packet = (char *)malloc(data->packet_len);
-	if (queue->queue[tail].packet) {
-		memcpy(queue->queue[tail].packet, data->packet, data->packet_len);
-	} else {
-		if (!ERRORS) { fprintf(stderr, "Failed to allocate memory for packet in enqueue.\n"); }
-		return false;
-	}
+    // Copy metadata
+    queue->queue[tail] = *data;
 
-	// Atomically update the tail index
-	InterlockedCompareExchange(&queue->tail, next, tail);
+    // Allocate and copy packet data
+    queue->queue[tail].packet = (char *)malloc(data->packet_len);
+    if (!queue->queue[tail].packet) {
+        if (!ERRORS) { fprintf(stderr, "Failed to allocate memory for packet in enqueue.\n"); }
+        return false;
+    }
+    memcpy(queue->queue[tail].packet, data->packet, data->packet_len);
 
-	return true;
+    // Atomically update the tail index
+    InterlockedExchange(&queue->tail, next);
+
+    // Atomically increment queue size
+    InterlockedIncrement(&queue->size);
+
+    return true;
 }
 
 // Dequeue a packet (returns false if empty)
 bool dequeue(LockFreeQueue *queue, PacketData *data) {
-	LONG head = queue->head;
+    if (InterlockedOr(&queue->size, 0) == 0) {
+        return false;  // Queue empty
+    }
 
-	if (head == queue->tail) {
-		return false; // Queue is empty
-	}
+    LONG head = queue->head;
+    if (head == queue->tail) {
+        return false; // Queue still empty (redundant safety check)
+    }
 
-	// Copy packet data
-	*data = queue->queue[head];
+    // Copy packet data
+    *data = queue->queue[head];
 
-	// Atomically update the head index
-	InterlockedCompareExchange(&queue->head, (head + 1) % queue->capacity, head);
+    // Atomically update the head index
+    InterlockedExchange(&queue->head, (head + 1) % queue->capacity);
 
-	return true;
+    // Atomically decrement queue size
+    InterlockedDecrement(&queue->size);
+
+    return true;
+}
+
+// Check if queue is full (safe for multiple threads)
+bool is_queue_full(LockFreeQueue *queue) {
+    return InterlockedOr(&queue->size, 0) >= queue->capacity * 0.8;
 }
 
 // Cleanup function for queue
 void destroy_queue(LockFreeQueue *queue) {
-	for (size_t i = 0; i < queue->capacity; i++) {
-		free(queue->queue[i].packet); // Free packet memory
-	}
-	free(queue->queue); // Free queue memory
-	queue->queue = NULL;
+    for (size_t i = 0; i < queue->capacity; i++) {
+        free(queue->queue[i].packet);
+    }
+    free(queue->queue);
+    queue->queue = NULL;
 }
 
 ///
@@ -1066,6 +1127,9 @@ DWORD WINAPI capture_packets(LPVOID arg) {
 			continue;
 		}
 
+		// Reset requeue attempts for new packets
+		data.requeue_attempts = 0;
+
 		// Check if we're dealing with a network packet
 		if (data.addr.Layer == WINDIVERT_LAYER_NETWORK) {
 			unsigned int if_idx = data.addr.Network.IfIdx;
@@ -1083,7 +1147,7 @@ DWORD WINAPI capture_packets(LPVOID arg) {
 		// Check queue and enqueue packet
 		if (!enqueue(queue, &data)) {
 			if (!QUIET) { printf("Queue is full, dropping packet.\n"); }
-			non_blocking_delay(1); // Reduce CPU usage when queue is full or when waiting for packets
+			Sleep(1); // Reduce CPU usage when queue is full or when waiting for packets
 		}
 	}
 
@@ -1092,36 +1156,99 @@ DWORD WINAPI capture_packets(LPVOID arg) {
 	return 0;
 }
 
+// Thread function for handling PIDs
+DWORD WINAPI pid_updater(LPVOID arg) {
+	ThreadArgs *args = (ThreadArgs*)arg;
+    ProcessParams *processparams = args->processparams;
+
+    while (InterlockedOr(&pid_thread_running, 0) && InterlockedOr(&running, 0)) {
+		// Update PIDs dynamically based on thresholds
+		if (processparams->process_list != NULL) {
+			update_pid_map(processparams);
+		} else {
+			// Stop this thread by setting the flag to 0
+			InterlockedExchange(&pid_thread_running, 0);  // Set thread flag to 0 to stop it
+			break;  // Exit the loop
+		}
+
+		// Check if Ctrl+C is pressed or other threads are set to close
+		if (running == 0) {
+			break; // Exit the loop
+		}
+
+        Sleep(100);
+    }
+    return 0;
+}
+
 // Thread function for processing packets for traffic shaping
 DWORD WINAPI process_packets(LPVOID arg) {
 	ThreadArgs *args = (ThreadArgs*)arg;
 	ThrottlingParams *params = args->params;
 	ProcessParams *processparams = args->processparams;
 	LockFreeQueue *queue = args->queue;
+	unsigned int new_len;
 
 	//while (InterlockedCompareExchange(&running, 1, 1) == 1) {  // Check atomic flag
 	while (InterlockedOr(&running, 0)) {
 		PacketData data;
 		if (!dequeue(queue, &data)) {
-			non_blocking_delay(1);  // Wait for packets to arrive
+			Sleep(1);  // Wait for packets to arrive
+			continue;
+		}
+		
+		// Check how queue is filled, this should prevent packet congestion
+		if (is_queue_full(queue)) {
+			if (DEBUG) { printf("Debug: Queue nearly full, dropping packet.\n"); }
+			free(data.packet);
 			continue;
 		}
 
-		// Update PIDs dynamically based on thresholds
-		update_pid_map(processparams);
+        // Make a temporary pointer for checking reinjection flag
+        uint8_t *packet_copy = data.packet;
+        unsigned int packet_len_copy = data.packet_len;
+
+        // Check if the packet was already reinjected (before stripping)
+        if (data.requeue_attempts == 0 && is_reinjected_packet(packet_copy, packet_len_copy)) {
+			if (DEBUG) { printf("Debug: Packet with PID %ld already reinjected, skipping.\n", get_packet_pid(&data.addr, data.packet, data.packet_len)); }
+            free(data.packet);
+            continue;
+        }
+
+        // Strip reinjection flag from the actual packet (ensure it's safe)
+        uint8_t *stripped_packet = strip_reinject_flag(data.packet, &data.packet_len);
+        if (!stripped_packet) {  
+			if (DEBUG) { printf("Debug: Failed to strip reinjection flag from packet.\n"); }
+            free(data.packet);
+            continue;
+        }
+        data.packet = stripped_packet; // Assign the stripped version
+
+		// Mark packet with custom flag (append flag at the end)
+		uint8_t *marked_packet = mark_packet_as_reinjected(data.packet, data.packet_len, &new_len);
+		if (!marked_packet) { 
+			if (DEBUG) { printf("Debug: Failed to mark packet with reinjection flag.\n"); }
+			free(data.packet);
+			continue;
+		}
+		data.packet = marked_packet;  // Only assign if successful
+		data.packet_len = new_len;
+		if (DEBUG) { printf("Debug: Packet marked with reinjection flag. New length: %u\n", data.packet_len); }
 
 		// Check if packet matches a monitored process
 		if (processparams->process_list != NULL) {
 			DWORD pid = get_packet_pid(&data.addr, data.packet, data.packet_len);
-
-			if (!is_pid_in_map(processparams->pid_map, pid)) {
-				if (should_drop_packet(data.handle, data.packet, data.packet_len, data.addr, params->packet_loss)) {
+			if (!is_pid_in_map(processparams->pid_map, pid) && pid != 0) {
+				if (DEBUG) { printf("Debug: PID %ld is not monitored, dropping related packet to it.\n", pid); }
+				// Reinject these packets back as is, if it's valid
+				if(data.packet) {
+					reinject_packet(data.handle, data.packet, data.packet_len, &data.addr);
+					free(data.packet);
+					continue;
+				} else {
 					free(data.packet);
 					continue;
 				}
-				reinject_packet(data.handle, data.packet, data.packet_len, &data.addr);
-				free(data.packet);
-				continue;
 			}
 		}
 
@@ -1138,7 +1265,7 @@ DWORD WINAPI process_packets(LPVOID arg) {
 					get_source_ip(&data.addr, ip_address);  // Get the source IP
 
 					if (!check_packet_rate_limit(processparams, ip_address, src_port, params->max_tcp_connections)) {
-						if (DEBUG) { printf("Dropped TCP packet, IP: %s, src port: %d, dest port: %d\n", ip_address, src_port, dest_port); }
+						if (DEBUG) { printf("Debug: Dropped TCP packet, IP: %s, src port: %d, dest port: %d\n", ip_address, src_port, dest_port); }
 						free(data.packet);  // Drop packet if limit exceeded
 						continue;
 					}
@@ -1159,7 +1286,7 @@ DWORD WINAPI process_packets(LPVOID arg) {
 					get_source_ip(&data.addr, ip_address);  // Get the source IP
 
 					if (!check_packet_rate_limit(processparams, ip_address, src_port, params->max_udp_packets_per_second)) {
-						if (DEBUG) { printf("Dropped UDP packet, IP: %s, src port: %d, dest port: %d\n", ip_address, src_port, dest_port); }
+						if (DEBUG) { printf("Debug: Dropped UDP packet, IP: %s, src port: %d, dest port: %d\n", ip_address, src_port, dest_port); }
 						free(data.packet);  // Drop packet if limit exceeded
 						continue;
 					}
@@ -1173,13 +1300,14 @@ DWORD WINAPI process_packets(LPVOID arg) {
 							  : ((args->download_bucket.rate > 0) ? &args->download_bucket : NULL);
 
 		if (bucket != NULL) {
-			if (DEBUG) { printf("Rate before update: %.2f\n", bucket->rate); }
+			if (DEBUG) { printf("Debug: Rate before update: %.2f\n", bucket->rate); }
 			token_bucket_update(bucket);
 
-			if (DEBUG) { printf("Bucket Rate: %.2f, Tokens Available: %.2f\n", bucket->rate, bucket->tokens); }
+			if (DEBUG) { printf("Debug: Bucket Rate: %.2f, Tokens Available: %.2f\n", bucket->rate, bucket->tokens); }
 
 			// Consume tokens from the bucket (if enough tokens available)
-			int retry_count = 3;  // Allow up to 3 retries
+			int retry_count = 5;  // Allow up to 5 retries
+
 			while (retry_count > 0) {
 				if (token_bucket_consume(bucket, data.packet_len)) {
 					break;  // Success, send packet
@@ -1192,12 +1320,21 @@ DWORD WINAPI process_packets(LPVOID arg) {
 				retry_count--;
 			}
 
-			if (retry_count == 0) {  // If all retries failed, drop the packet
+			// If retries failed, try requeueing
+			if (retry_count == 0) {
+				if (data.requeue_attempts < 3) {
+					data.requeue_attempts++;  // Increase requeue count
+					if (enqueue(queue, &data)) { 
+						continue; // Successfully requeued, skip further processing
+					}
+				}
+				
+				// If max requeue attempts exceeded or queue is full, drop the packet
 				free(data.packet);
 				continue;
 			}
-			
-			if (DEBUG) { printf("Tokens remaining after consumption: %.2f\n", bucket->tokens); }
+
+			if (DEBUG) { printf("Debug: Tokens remaining after consumption: %.2f\n", bucket->tokens); }
 		}
 
 		// Simulate packet loss
@@ -1212,11 +1349,16 @@ DWORD WINAPI process_packets(LPVOID arg) {
 		}
 
 		// Reinject the processed packet
-		if (DEBUG) { printf("Reinjecting packet of size %d\n", data.packet_len); }
-		reinject_packet(data.handle, data.packet, data.packet_len, &data.addr);
-
-		// Cleanup
-		free(data.packet);
+		if (DEBUG) { printf("Debug: Reinjecting packet of size %lu\n", data.packet_len); }
+		
+		// Only reinject valid packet data
+		if(data.packet) {
+			reinject_packet(data.handle, data.packet, data.packet_len, &data.addr);
+			free(data.packet);
+		} else {
+			free(data.packet);
+			continue;  // Skip further processing for invalid packet
+		}
 	}
 
 	return 0;
@@ -1279,12 +1421,12 @@ DWORD WINAPI exit_key(LPVOID arg) {
 			break;
 		}
 
-		// Check if Ctrl+C is pressed
+		// Check if Ctrl+C is pressed or other threads are set to close
 		if (running == 0) {
 			break; // Exit thread if running flag is set to 0 by Ctrl+C
 		}
 
-		non_blocking_delay(100); // Reduce CPU usage
+		Sleep(100); // Reduce CPU usage
 	}
 
 	return 0;
@@ -1332,10 +1474,10 @@ void print_help(const char *program_path) {
 	printf("  -D, --download-buffer <bytes>                Maximum download buffer size in bytes (default: 150000)\n");
 	printf("  -U, --upload-buffer <bytes>                  Maximum upload buffer size in bytes (default: 150000)\n");
 	printf("  -b, --packet-buffer <bytes>                  Maximum packet buffer size in bytes (default: 65535)\n");
-	printf("  -L, --latency <ms>                           Set the latency in milliseconds (default: 0 = no latency)\n");
-	printf("  -m, --packet-loss <float>                    Set the packet loss in percentage (default: 0.00 = no loss)\n");
 	printf("  -t, --tcp-limit <NUM>                        Maximum limit of active TCP connections (default: 0 = unlimited)\n");
 	printf("  -r, --udp-limit <NUM>                        Maximum limit of active UDP connections (default: 0 = unlimited)\n");
+	printf("  -L, --latency <ms>                           Set the latency in milliseconds (default: 0 = no latency)\n");
+	printf("  -m, --packet-loss <float>                    Set the packet loss in percentage (default: 0.00 = no loss)\n");
 	printf("  -n, --nic <interface_index>                  Throttle traffic for the specified network interfaces (comma-separated)\n");
 	printf("  -l, --list-nics                              List all available network interfaces\n");
 	printf("  -d, --debug                                  Display more informational messages (in case of issues)\n");
@@ -1345,7 +1487,7 @@ void print_help(const char *program_path) {
 }
 
 // Log packet information (for debugging)
-//void log_packet(const char *direction, const TokenBucket *bucket, UINT packet_len) {
+//void log_packet(const char *direction, const TokenBucket *bucket, unsigned int packet_len) {
 //	printf("[%s] Packet size: %u, Tokens: %.2f\n", direction, packet_len, (double)bucket->tokens);
 //}
 
@@ -1638,32 +1780,39 @@ int main(int argc, char *argv[]) {
 
 	// Create threads using Windows API
 	HANDLE capture_thread = CreateThread(NULL, 0, capture_packets, &args, 0, NULL);
+	HANDLE pid_thread = CreateThread(NULL, 0, pid_updater, &args, 0, NULL);
 	HANDLE process_thread = CreateThread(NULL, 0, process_packets, &args, 0, NULL);
 	HANDLE exit_thread = CreateThread(NULL, 0, exit_key, &args, 0, NULL);
-	
+
     // Check if any thread creation failed
 	if (!capture_thread) {
-		if (!ERRORS) { fprintf(stderr, "Failed to create capture thread.\n"); }
+		if (!ERRORS) { fprintf(stderr, "Failed to create the capture thread.\n"); }
+		goto cleanup_threads;
+	}
+	if (!pid_thread) {
+		if (!ERRORS) { fprintf(stderr, "Failed to create the PID thread.\n"); }
 		goto cleanup_threads;
 	}
 	if (!process_thread) {
-		if (!ERRORS) { fprintf(stderr, "Failed to create process thread.\n"); }
+		if (!ERRORS) { fprintf(stderr, "Failed to create the process thread.\n"); }
 		goto cleanup_threads;
 	}
 	if (!exit_thread) {
-		if (!ERRORS) { fprintf(stderr, "Failed to create exit thread.\n"); }
+		if (!ERRORS) { fprintf(stderr, "Failed to create the exit thread.\n"); }
 		goto cleanup_threads;
 	}
 
 	// Ensure all threads exit before cleanup
 	WaitForSingleObject(exit_thread, INFINITE);
 	WaitForSingleObject(capture_thread, INFINITE);
+	WaitForSingleObject(pid_thread, INFINITE);
 	WaitForSingleObject(process_thread, INFINITE);
 
 
 	cleanup_threads:
 		// Clean up handles if they were successfully created
 		if (capture_thread) CloseHandle(capture_thread);
+		if (pid_thread) CloseHandle(pid_thread);
 		if (process_thread) CloseHandle(process_thread);
 		if (exit_thread) CloseHandle(exit_thread);
 
