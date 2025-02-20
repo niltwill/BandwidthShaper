@@ -18,10 +18,10 @@
 #define WIN32_LEAN_AND_MEAN
 #define MAX_INTERVAL_STR_LEN 32
 #define REINJECT_FLAG 0xDEADBEEF         // Unique flag to mark reinjected packets
-#define INIT_PACKET_BUFFER 65535		 // Initial packet buffer size in bytes
-#define DEFAULT_MAX_BUFFER 75000		 // Default max buffer size in bytes
-#define DEFAULT_DL_BUFFER 150000		 // Default download buffer size in bytes
-#define DEFAULT_UL_BUFFER 150000		 // Default upload buffer size in bytes
+#define INIT_PACKET_BUFFER 65535         // Initial packet buffer size in bytes
+#define DEFAULT_MAX_BUFFER 75000         // Default max buffer size in bytes
+#define DEFAULT_DL_BUFFER 150000         // Default download buffer size in bytes
+#define DEFAULT_UL_BUFFER 150000         // Default upload buffer size in bytes
 
 // Standard library headers
 #include <stdio.h>
@@ -49,10 +49,10 @@
 #pragma comment(lib, "User32.lib")
 #pragma comment(lib, "iphlpapi.lib")
 
-// Global atomic flag for controlling the loop in multiple threads
+// Global atomic flag for controlling the loop in multiple threads (1 = enabled at start)
 volatile LONG running = 1;
 
-// PID thread specific flag
+// PID thread specific flag (1 = enabled at start)
 volatile LONG pid_thread_running = 1;
 
 ///
@@ -150,6 +150,8 @@ typedef struct {
 	float packet_loss;
 	unsigned int *nic_indices;
 	unsigned int nic_count;
+	double *download_limits; // Download rate per NIC (bytes per second)
+	double *upload_limits;   // Upload rate per NIC (bytes per second)
 	unsigned int max_tcp_connections;
 	unsigned int max_udp_packets_per_second;
 } ThrottlingParams;
@@ -181,8 +183,9 @@ typedef struct {
 	PacketData *data;
 	ThrottlingParams *params;
 	ProcessParams *processparams;
-	TokenBucket download_bucket;
-	TokenBucket upload_bucket;
+	TokenBucket *download_buckets;
+	TokenBucket *upload_buckets;
+	int bucket_count;
 } ThreadArgs;
 
 ///
@@ -205,19 +208,19 @@ DWORD find_tcp_pid(UINT16 port) {
 	ULONG size = 0;
 	DWORD result = GetExtendedTcpTable(NULL, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
 	if (result != ERROR_INSUFFICIENT_BUFFER) {
-		if (!ERRORS) { fprintf(stderr, "Failed to get buffer size for TCP table\n"); }
+		if (!ERRORS) fprintf(stderr, "Failed to get buffer size for TCP table\n");
 		return 0;
 	}
 
 	tcpTable = (PMIB_TCPTABLE_OWNER_PID)malloc(size);
 	if (!tcpTable) {
-		if (!ERRORS) { fprintf(stderr, "Memory allocation failed for TCP table\n"); }
+		if (!ERRORS) fprintf(stderr, "Memory allocation failed for TCP table\n");
 		return 0;
 	}
 
 	result = GetExtendedTcpTable(tcpTable, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
 	if (result != NO_ERROR) {
-		if (!ERRORS) { fprintf(stderr, "Failed to retrieve TCP table\n"); }
+		if (!ERRORS) fprintf(stderr, "Failed to retrieve TCP table\n");
 		free(tcpTable);
 		return 0;
 	}
@@ -240,19 +243,19 @@ DWORD find_udp_pid(UINT16 port) {
 	ULONG size = 0;
 	DWORD result = GetExtendedUdpTable(NULL, &size, FALSE, AF_INET, UDP_TABLE_OWNER_PID, 0);
 	if (result != ERROR_INSUFFICIENT_BUFFER) {
-		if (!ERRORS) { fprintf(stderr, "Failed to get buffer size for UDP table\n"); }
+		if (!ERRORS) fprintf(stderr, "Failed to get buffer size for UDP table\n");
 		return 0;
 	}
 
 	udpTable = (PMIB_UDPTABLE_OWNER_PID)malloc(size);
 	if (!udpTable) {
-		if (!ERRORS) { fprintf(stderr, "Memory allocation failed for UDP table\n"); }
+		if (!ERRORS) fprintf(stderr, "Memory allocation failed for UDP table\n");
 		return 0;
 	}
 
 	result = GetExtendedUdpTable(udpTable, &size, FALSE, AF_INET, UDP_TABLE_OWNER_PID, 0);
 	if (result != NO_ERROR) {
-		if (!ERRORS) { fprintf(stderr, "Failed to retrieve UDP table\n"); }
+		if (!ERRORS) fprintf(stderr, "Failed to retrieve UDP table\n");
 		free(udpTable);
 		return 0;
 	}
@@ -438,20 +441,20 @@ void token_bucket_update(TokenBucket *bucket) {
 	// Lock the bucket before making changes
 	EnterCriticalSection(&bucket->lock);
 
-	if (DEBUG) { printf("Debug: Bucket Rate: %.2f, Elapsed time: %lu ms\n", bucket->rate, elapsed); }
+	if (DEBUG) printf("Debug: Bucket Rate: %.2f, Elapsed time: %lu ms\n", bucket->rate, elapsed);
 
 	// Replenish tokens based on elapsed time and rate (this will work with fractional tokens)
 	if (elapsed > 0 && bucket->rate > 0) {
 		double tokens_to_add = bucket->rate * (elapsed / 1000.0);
-		if (DEBUG) { printf("Debug: Tokens to add: %.2f\n", tokens_to_add); }
+		if (DEBUG) printf("Debug: Tokens to add: %.2f\n", tokens_to_add);
 		bucket->tokens = fmin(bucket->tokens + tokens_to_add, bucket->max_tokens);
 	} else {
-		if (DEBUG) { printf("Debug: Skipping token addition due to zero elapsed time or zero rate.\n"); }
+		if (DEBUG) printf("Debug: Skipping token addition due to zero elapsed time or zero rate.\n");
 	}
 
 	bucket->last_checked = now;  // Update last checked time
 	
-	if (DEBUG) { printf("Debug: Tokens in bucket after update: %.2f, Max tokens: %f\n", bucket->tokens, bucket->max_tokens); }
+	if (DEBUG) printf("Debug: Tokens in bucket after update: %.2f, Max tokens: %f\n", bucket->tokens, bucket->max_tokens);
 
 	// Unlock the bucket after updating
 	LeaveCriticalSection(&bucket->lock);
@@ -503,7 +506,7 @@ BOOL capture_packet(HANDLE handle, char *packet, UINT packet_size, WINDIVERT_ADD
 			// Wait for the operation to complete
 			WaitForSingleObject(recv_overlap.hEvent, INFINITE);
 			if (!GetOverlappedResult(handle, &recv_overlap, recv_len, FALSE)) {
-				if (!ERRORS) { fprintf(stderr, "Failed to read packet after async completion: %lu\n", GetLastError()); }
+				if (!ERRORS) fprintf(stderr, "Failed to read packet after async completion: %lu\n", GetLastError());
 				CloseHandle(recv_overlap.hEvent);
 				return FALSE;
 			}
@@ -511,7 +514,7 @@ BOOL capture_packet(HANDLE handle, char *packet, UINT packet_size, WINDIVERT_ADD
 			CloseHandle(recv_overlap.hEvent);
 			return FALSE;  // Timeout occurred, signal no packet captured
 		} else {
-			if (!ERRORS) { fprintf(stderr, "Failed to read packet: %lu\n", error); }
+			if (!ERRORS) fprintf(stderr, "Failed to read packet: %lu\n", error);
 			CloseHandle(recv_overlap.hEvent);
 			return FALSE;
 		}
@@ -545,10 +548,10 @@ void reinject_packet(HANDLE handle, char *packet, unsigned int packet_len, WINDI
 			// Wait for the operation to complete
 			WaitForSingleObject(send_overlap.hEvent, INFINITE);
 			if (!GetOverlappedResult(handle, &send_overlap, &send_len, FALSE)) {
-				if (!ERRORS) { fprintf(stderr, "Failed to send packet after async completion: %lu\n", GetLastError()); }
+				if (!ERRORS) fprintf(stderr, "Failed to send packet after async completion: %lu\n", GetLastError());
 			}
 		} else {
-			if (!ERRORS) { fprintf(stderr, "Failed to send packet: %lu\n", error); }
+			if (!ERRORS) fprintf(stderr, "Failed to send packet: %lu\n", error);
 		}
 	}
 
@@ -590,11 +593,58 @@ uint8_t *strip_reinject_flag(uint8_t *packet, unsigned int *len) {
     return packet;  // Return the same pointer with the new length
 }
 
+// Function to parse a rate string with units
+double parse_rate_with_units(const char *rate_str) {
+	char unit[3] = {0}; // To handle two-character units like "Gb", "Mb", etc.
+	double value = 0;
+
+	// Parse the numeric value and optional unit
+	if (sscanf(rate_str, "%lf%2s", &value, unit) >= 1) {
+		// Determine the multiplier based on the unit (case-sensitive)
+		if (strcmp(unit, "b") == 0) {			 // Bytes
+			return value;
+		} else if (strcmp(unit, "KB") == 0) {	 // Kilobytes
+			return value * 1000.0;
+		} else if (strcmp(unit, "MB") == 0) {	 // Megabytes
+			return value * 1000000.0;
+		} else if (strcmp(unit, "GB") == 0) {	 // Gigabytes
+			return value * 1000000000.0;
+		} else if (strcmp(unit, "Kb") == 0) {	 // Kilobits
+			return value * 1000.0 / 8.0;
+		} else if (strcmp(unit, "Mb") == 0) {	 // Megabits
+			return value * 1000000.0 / 8.0;
+		} else if (strcmp(unit, "Gb") == 0) {	 // Gigabits
+			return value * 1000000000.0 / 8.0;
+		} else if (unit[0] == '\0') {			 // No unit specified
+			return value * 1000.0;				 // Default to kilobytes
+		} else {
+			if (!ERRORS) fprintf(stderr, "Invalid unit '%s' in rate '%s'. Defaulting to kilobytes.\n", unit, rate_str);
+			return value * 1000.0; // Default to kilobytes
+		}
+	} else {
+		if (!ERRORS) fprintf(stderr, "Failed to parse rate '%s'. Defaulting to 0.\n", rate_str);
+		return 0;
+	}
+}
+
+// Function to print rate for different units
+void print_rate_with_units(const char *label, double rate_bps) {
+	if (rate_bps >= 1000000000.0) { // Gigabits per second
+		printf("%s: %.2f Gbps (%.2f GBps)\n", label, rate_bps / 1000000000.0, rate_bps / (1000000000.0 * 8.0));
+	} else if (rate_bps >= 1000000.0) { // Megabits per second
+		printf("%s: %.2f Mbps (%.2f MBps)\n", label, rate_bps / 1000000.0, rate_bps / (1000000.0 * 8.0));
+	} else if (rate_bps >= 1000.0) { // Kilobits per second
+		printf("%s: %.2f Kbps (%.2f KBps)\n", label, rate_bps / 1000.0, rate_bps / (1000.0 * 8.0));
+	} else { // Bits per second
+		printf("%s: %.2f bps (%.2f Bps)\n", label, rate_bps, rate_bps / 8.0);
+	}
+}
+
 // Function to add a PID to the hash map
 void add_pid_to_map(PIDEntry **pid_map, int pid) {
 	PIDEntry *entry = malloc(sizeof(PIDEntry));
 	if (!entry) {
-		if (!ERRORS) { fprintf(stderr, "Memory allocation failed!\n"); }
+		if (!ERRORS) fprintf(stderr, "Memory allocation failed!\n");
 		exit(EXIT_FAILURE);
 	}
 	entry->pid = pid;
@@ -621,7 +671,7 @@ void free_pid_map(PIDEntry *pid_map) {
 int get_pids_from_name(const char *process_name, int **pid_list) {
 	DWORD processes[1024], needed;
 	if (!EnumProcesses(processes, sizeof(processes), &needed)) {
-		if (!ERRORS) { fprintf(stderr, "Failed to enumerate processes.\n"); }
+		if (!ERRORS) fprintf(stderr, "Failed to enumerate processes.\n");
 		return 0;
 	}
 
@@ -650,33 +700,37 @@ int get_pids_from_name(const char *process_name, int **pid_list) {
 
 // Parse a comma-separated string of process names into an array
 char **parse_processes(char *input, int *count) {
-	int capacity = 16;  // Initial capacity for the array
-	char **processes = malloc(capacity * sizeof(char *));  // Allocate space for up to 'capacity' processes
+	int capacity = 16;
+	char **processes = malloc(capacity * sizeof(char *));
 	if (processes == NULL) {
-		if (!ERRORS) { fprintf(stderr, "Memory allocation failed!\n"); }
+		if (!ERRORS) fprintf(stderr, "Memory allocation failed!\n");
 		exit(EXIT_FAILURE);
 	}
 	*count = 0;
 
-	char *token = strtok(input, ",");
+	char *token;
+	char *context = NULL;  // Required for strtok_s
+	token = strtok_s(input, ",", &context);
 	while (token != NULL) {
-		// Resize the array if needed
 		if (*count >= capacity) {
-			capacity *= 2;  // Double the capacity
+			capacity *= 2;
 			processes = realloc(processes, capacity * sizeof(char *));
 			if (processes == NULL) {
-				if (!ERRORS) { fprintf(stderr, "Memory allocation failed during resizing!\n"); }
+				if (!ERRORS) fprintf(stderr, "Memory allocation failed during resizing!\n");
 				exit(EXIT_FAILURE);
 			}
 		}
 
-		processes[*count] = strdup(token);  // Copy the process name
+		// Trim leading spaces
+		while (*token == ' ') token++;
+
+		processes[*count] = strdup(token);
 		if (processes[*count] == NULL) {
-			if (!ERRORS) { fprintf(stderr, "Memory allocation failed for process name!\n"); }
+			if (!ERRORS) fprintf(stderr, "Memory allocation failed for process name!\n");
 			exit(EXIT_FAILURE);
 		}
 		(*count)++;
-		token = strtok(NULL, ",");
+		token = strtok_s(NULL, ",", &context);
 	}
 
 	return processes;
@@ -726,41 +780,54 @@ void list_network_interfaces() {
 }
 
 // Helper function to parse comma-separated NIC indices
-int *parse_nic_indices(const char *input, ThrottlingParams *params) {
-	char *copy = strdup(input);
-	if (!copy) {
-		if (!ERRORS) { fprintf(stderr, "Memory allocation failed for NIC index parsing.\n"); }
-		exit(EXIT_FAILURE);
-	}
+unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
+    char *copy = strdup(input);
+    if (!copy) {
+        fprintf(stderr, "Memory allocation failed for NIC parsing.\n");
+        exit(EXIT_FAILURE);
+    }
 
-	char *token = strtok(copy, ",");
-	int capacity = 16;
-	int *nic_indices = malloc(capacity * sizeof(int));
-	if (!nic_indices) {
-		if (!ERRORS) { fprintf(stderr, "Memory allocation failed for NIC indices array.\n"); }
-		free(copy);
-		exit(EXIT_FAILURE);
-	}
+    char *token = strtok(copy, ",");
+    int capacity = 16;
+    int *nic_indices = malloc(capacity * sizeof(int));
+    params->download_limits = malloc(capacity * sizeof(double));
+    params->upload_limits = malloc(capacity * sizeof(double));
 
-	params->nic_count = 0;  // Fix: No need for pointer dereferencing
+    if (!nic_indices || !params->upload_limits || !params->download_limits) {
+        fprintf(stderr, "Memory allocation failed for NIC parameters.\n");
+        free(copy);
+        exit(EXIT_FAILURE);
+    }
 
-	while (token) {
-		if (params->nic_count >= capacity) {
-			capacity *= 2;
-			int *new_indices = realloc(nic_indices, capacity * sizeof(int));
-			if (!new_indices) {
-				if (!ERRORS) { fprintf(stderr, "Memory reallocation failed for NIC indices array.\n"); }
-				free(nic_indices);
-				free(copy);
-				exit(EXIT_FAILURE);
-			}
+    params->nic_count = 0;
+    
+    while (token) {
+        if (params->nic_count >= capacity) {
+            capacity *= 2;
+            int *new_indices = realloc(nic_indices, capacity * sizeof(int));
+            params->download_limits = realloc(params->download_limits, capacity * sizeof(double));
+            params->upload_limits = realloc(params->upload_limits, capacity * sizeof(double));
+            if (!new_indices || !params->download_limits || !params->upload_limits) {
+                fprintf(stderr, "Memory reallocation failed.\n");
+                exit(EXIT_FAILURE);
+            }
 			nic_indices = new_indices;
-		}
-		nic_indices[params->nic_count++] = atoi(token);
-		token = strtok(NULL, ",");
-	}
+        }
 
-	free(copy);
+        // Parse "NIC_INDEX:DOWNLOAD:UPLOAD"
+        char *nic_part = strtok(token, ":");
+        char *download_part = strtok(NULL, ":");
+        char *upload_part = strtok(NULL, ":");
+
+        nic_indices[params->nic_count] = atoi(nic_part);
+        params->download_limits[params->nic_count] = download_part ? parse_rate_with_units(download_part) : 0;
+		params->upload_limits[params->nic_count] = upload_part ? parse_rate_with_units(upload_part) : 0;
+
+        params->nic_count++;
+        token = strtok(NULL, ",");
+    }
+
+    free(copy);
 	return nic_indices;
 }
 
@@ -786,7 +853,7 @@ int parse_process_update_interval(const char *input, ProcessParams *processparam
 	}
 
 	if (len < 2 || len >= MAX_INTERVAL_STR_LEN) {
-		if (!ERRORS) { fprintf(stderr, "Error: Invalid format for --process-update-interval. Use '<value>p', '<value>t', or '0'.\n"); }
+		if (!ERRORS) fprintf(stderr, "Error: Invalid format for --process-update-interval. Use '<value>p', '<value>t', or '0'.\n");
 		return -1;
 	}
 
@@ -795,7 +862,7 @@ int parse_process_update_interval(const char *input, ProcessParams *processparam
 	value_str[len - 1] = '\0';		    // Null-terminate
 
 	if (!isdigit(value_str[0])) {
-		if (!ERRORS) { fprintf(stderr, "Error: Invalid numeric value for --process-update-interval.\n"); }
+		if (!ERRORS) fprintf(stderr, "Error: Invalid numeric value for --process-update-interval.\n");
 		return -1;
 	}
 
@@ -809,58 +876,11 @@ int parse_process_update_interval(const char *input, ProcessParams *processparam
 		processparams->time_threshold_ms = value;
 		processparams->packet_threshold = 0; // Disable packet-based updates
 	} else {
-		if (!ERRORS) { fprintf(stderr, "Error: Unknown unit '%c' for --process-update-interval. Use 'p' for packets, 't' for time, or '0'.\n", unit); }
+		if (!ERRORS) fprintf(stderr, "Error: Unknown unit '%c' for --process-update-interval. Use 'p' for packets, 't' for time, or '0'.\n", unit);
 		return -1;
 	}
 
 	return 0; // Success
-}
-
-// Function to parse a rate string with units
-double parse_rate_with_units(const char *rate_str) {
-	char unit[3] = {0}; // To handle two-character units like "Gb", "Mb", etc.
-	double value = 0;
-
-	// Parse the numeric value and optional unit
-	if (sscanf(rate_str, "%lf%2s", &value, unit) >= 1) {
-		// Determine the multiplier based on the unit (case-sensitive)
-		if (strcmp(unit, "b") == 0) {			 // Bytes
-			return value;
-		} else if (strcmp(unit, "KB") == 0) {	 // Kilobytes
-			return value * 1000.0;
-		} else if (strcmp(unit, "MB") == 0) {	 // Megabytes
-			return value * 1000000.0;
-		} else if (strcmp(unit, "GB") == 0) {	 // Gigabytes
-			return value * 1000000000.0;
-		} else if (strcmp(unit, "Kb") == 0) {	 // Kilobits
-			return value * 1000.0 / 8.0;
-		} else if (strcmp(unit, "Mb") == 0) {	 // Megabits
-			return value * 1000000.0 / 8.0;
-		} else if (strcmp(unit, "Gb") == 0) {	 // Gigabits
-			return value * 1000000000.0 / 8.0;
-		} else if (unit[0] == '\0') {			 // No unit specified
-			return value * 1000.0;				 // Default to kilobytes
-		} else {
-			if (!ERRORS) { fprintf(stderr, "Invalid unit '%s' in rate '%s'. Defaulting to kilobytes.\n", unit, rate_str); }
-			return value * 1000.0; // Default to kilobytes
-		}
-	} else {
-		if (!ERRORS) { fprintf(stderr, "Failed to parse rate '%s'. Defaulting to 0.\n", rate_str); }
-		return 0;
-	}
-}
-
-// Function to print rate for different units
-void print_rate_with_units(const char *label, double rate_bps) {
-	if (rate_bps >= 1000000000.0) { // Gigabits per second
-		printf("%s: %.2f Gbps (%.2f GBps)\n", label, rate_bps / 1000000000.0, rate_bps / (1000000000.0 * 8.0));
-	} else if (rate_bps >= 1000000.0) { // Megabits per second
-		printf("%s: %.2f Mbps (%.2f MBps)\n", label, rate_bps / 1000000.0, rate_bps / (1000000.0 * 8.0));
-	} else if (rate_bps >= 1000.0) { // Kilobits per second
-		printf("%s: %.2f Kbps (%.2f KBps)\n", label, rate_bps / 1000.0, rate_bps / (1000.0 * 8.0));
-	} else { // Bits per second
-		printf("%s: %.2f bps (%.2f Bps)\n", label, rate_bps, rate_bps / 8.0);
-	}
 }
 
 int get_process_name_from_pid(DWORD pid, char *process_name, size_t name_size) {
@@ -887,7 +907,7 @@ bool should_drop_packet(HANDLE handle, char *packet, unsigned int packet_len, WI
 	if (packet_loss > 0.00f) {
 		float rand_value = (float)rand() / (float)RAND_MAX;  // Generate a random float between 0.0 and 1.0
 		if (rand_value < (packet_loss / 100.0f)) {
-			if (DEBUG) { printf("Debug: Dropped packet to simulate loss (%.2f%%)\n", packet_loss); }
+			if (DEBUG) printf("Debug: Dropped packet to simulate loss (%.2f%%)\n", packet_loss);
 			return true;  // Drop the packet
 		}
 	}
@@ -931,16 +951,26 @@ void update_pid_map(ProcessParams *processparams) {
     UT_hash_handle *hh;
     HASH_ITER(hh, processparams->pid_map, entry, tmp) {
         if (!is_process_alive(entry->pid)) {
-			if (!QUIET) { printf("Stale PID %u was removed.\n", entry->pid); }
+			if (!QUIET) printf("Stale PID %u was removed.\n", entry->pid);
             HASH_DEL(processparams->pid_map, entry);
             free(entry);
         }
     }
 
+	// Add new PIDs
 	int process_count = 0;
-	char **processes = parse_processes(processparams->process_list, &process_count);
+	char *process_list_copy = strdup(processparams->process_list);
+	if (process_list_copy == NULL) {
+		if (!ERRORS) fprintf(stderr, "Memory allocation failed!\n");
+		exit(EXIT_FAILURE);
+	}
+	char **processes = parse_processes(process_list_copy, &process_count);
+	free(process_list_copy);  // Free the copy after parsing
 
+	// Resolve PIDs and add to hash map
 	for (int i = 0; i < process_count; i++) {
+		if (DEBUG) printf("Debug: Processing: '%s'\n", processes[i]);
+
 		int *pid_list = NULL;
 		int pid_count = get_pids_from_name(processes[i], &pid_list);
 
@@ -952,7 +982,7 @@ void update_pid_map(ProcessParams *processparams) {
                 // Verify process existence before adding
                 if (is_process_alive(pid)) {
                     add_pid_to_map(&processparams->pid_map, pid);
-                    if (!QUIET) { printf("Added new PID %d for process '%s' to the hash map.\n", pid, processes[i]); }
+                    if (!QUIET) printf("Added new PID '%d' for process '%s' to the hash map.\n", pid, processes[i]);
                 }
             }
 		}
@@ -1004,7 +1034,7 @@ void non_blocking_delay(int delay_ms) {
 bool init_queue(LockFreeQueue *queue, size_t capacity) {
     queue->queue = (PacketData*)malloc(sizeof(PacketData) * capacity);
     if (!queue->queue) {
-        if (!ERRORS) { fprintf(stderr, "Memory allocation failed for queue.\n"); }
+        if (!ERRORS) fprintf(stderr, "Memory allocation failed for queue.\n");
         return false;
     }
     queue->capacity = capacity;
@@ -1034,7 +1064,7 @@ bool enqueue(LockFreeQueue *queue, PacketData *data) {
     // Allocate and copy packet data
     queue->queue[tail].packet = (char *)malloc(data->packet_len);
     if (!queue->queue[tail].packet) {
-        if (!ERRORS) { fprintf(stderr, "Failed to allocate memory for packet in enqueue.\n"); }
+        if (!ERRORS) fprintf(stderr, "Failed to allocate memory for packet in enqueue.\n");
         return false;
     }
     memcpy(queue->queue[tail].packet, data->packet, data->packet_len);
@@ -1099,7 +1129,7 @@ DWORD WINAPI capture_packets(LPVOID arg) {
 	PacketData data;
 	data.packet = malloc(params->max_buffer_size);  // Allocate memory for packet
 	if (!data.packet) {
-		if (!ERRORS) { fprintf(stderr, "Failed to allocate memory for packet capture.\n"); }
+		if (!ERRORS) fprintf(stderr, "Failed to allocate memory for packet capture.\n");
 		return EXIT_FAILURE;
 	}
 
@@ -1120,10 +1150,10 @@ DWORD WINAPI capture_packets(LPVOID arg) {
 	}
 
 	// Capture loop - check atomic flag
-	while (InterlockedOr(&running, 0)) {
+	while (InterlockedCompareExchange(&running, 0, 0)) {
 		// Capture packet
 		if (!capture_packet(data.handle, data.packet, params->max_buffer_size, &data.addr, &data.packet_len)) {
-			if (!ERRORS) { fprintf(stderr, "Failed to read packet: %lu\n", GetLastError()); }
+			if (!ERRORS) fprintf(stderr, "Failed to read packet: %lu\n", GetLastError());
 			continue;
 		}
 
@@ -1140,13 +1170,13 @@ DWORD WINAPI capture_packets(LPVOID arg) {
 
 		// Ensure packet checksums are valid
 		if (!WinDivertHelperCalcChecksums(data.packet, data.packet_len, &data.addr, 0)) {
-			if (!ERRORS) { fprintf(stderr, "Checksum calculation failed.\n"); }
+			if (!ERRORS) fprintf(stderr, "Checksum calculation failed.\n");
 			continue;
 		}
 
 		// Check queue and enqueue packet
 		if (!enqueue(queue, &data)) {
-			if (!QUIET) { printf("Queue is full, dropping packet.\n"); }
+			if (!QUIET) printf("Queue is full, dropping packet.\n");
 			Sleep(1); // Reduce CPU usage when queue is full or when waiting for packets
 		}
 	}
@@ -1161,7 +1191,7 @@ DWORD WINAPI pid_updater(LPVOID arg) {
 	ThreadArgs *args = (ThreadArgs*)arg;
     ProcessParams *processparams = args->processparams;
 
-    while (InterlockedOr(&pid_thread_running, 0) && InterlockedOr(&running, 0)) {
+    while (InterlockedCompareExchange(&pid_thread_running, 0, 0) && InterlockedCompareExchange(&running, 0, 0)) {
 		// Update PIDs dynamically based on thresholds
 		if (processparams->process_list != NULL) {
 			update_pid_map(processparams);
@@ -1169,11 +1199,6 @@ DWORD WINAPI pid_updater(LPVOID arg) {
 			// Stop this thread by setting the flag to 0
 			InterlockedExchange(&pid_thread_running, 0);  // Set thread flag to 0 to stop it
 			break;  // Exit the loop
-		}
-
-		// Check if Ctrl+C is pressed or other threads are set to close
-		if (running == 0) {
-			break; // Exit the loop
 		}
 
         Sleep(100);
@@ -1189,8 +1214,7 @@ DWORD WINAPI process_packets(LPVOID arg) {
 	LockFreeQueue *queue = args->queue;
 	unsigned int new_len;
 
-	//while (InterlockedCompareExchange(&running, 1, 1) == 1) {  // Check atomic flag
-	while (InterlockedOr(&running, 0)) {
+	while (InterlockedCompareExchange(&running, 0, 0)) {
 		PacketData data;
 		if (!dequeue(queue, &data)) {
 			Sleep(1);  // Wait for packets to arrive
@@ -1199,7 +1223,7 @@ DWORD WINAPI process_packets(LPVOID arg) {
 		
 		// Check how queue is filled, this should prevent packet congestion
 		if (is_queue_full(queue)) {
-			if (DEBUG) { printf("Debug: Queue nearly full, dropping packet.\n"); }
+			if (DEBUG) printf("Debug: Queue nearly full, dropping packet.\n");
 			free(data.packet);
 			continue;
 		}
@@ -1210,15 +1234,14 @@ DWORD WINAPI process_packets(LPVOID arg) {
 
         // Check if the packet was already reinjected (before stripping)
         if (data.requeue_attempts == 0 && is_reinjected_packet(packet_copy, packet_len_copy)) {
-			if (DEBUG) { printf("Debug: Packet with PID %ld already reinjected, skipping.\n", get_packet_pid(&data.addr, data.packet, data.packet_len)); }
-            free(data.packet);
+			if (DEBUG) printf("Debug: Packet with PID %ld already reinjected, skipping.\n", get_packet_pid(&data.addr, data.packet, data.packet_len));
             continue;
         }
 
         // Strip reinjection flag from the actual packet (ensure it's safe)
         uint8_t *stripped_packet = strip_reinject_flag(data.packet, &data.packet_len);
         if (!stripped_packet) {  
-			if (DEBUG) { printf("Debug: Failed to strip reinjection flag from packet.\n"); }
+			if (DEBUG) printf("Debug: Failed to strip reinjection flag from packet.\n");
             free(data.packet);
             continue;
         }
@@ -1227,26 +1250,25 @@ DWORD WINAPI process_packets(LPVOID arg) {
 		// Mark packet with custom flag (append flag at the end)
 		uint8_t *marked_packet = mark_packet_as_reinjected(data.packet, data.packet_len, &new_len);
 		if (!marked_packet) { 
-			if (DEBUG) { printf("Debug: Failed to mark packet with reinjection flag.\n"); }
+			if (DEBUG) printf("Debug: Failed to mark packet with reinjection flag.\n");
 			free(data.packet);
 			continue;
 		}
 		data.packet = marked_packet;  // Only assign if successful
 		data.packet_len = new_len;
-		if (DEBUG) { printf("Debug: Packet marked with reinjection flag. New length: %u\n", data.packet_len); }
+		if (DEBUG) printf("Debug: Packet marked with reinjection flag. New length: %u\n", data.packet_len);
 
 		// Check if packet matches a monitored process
 		if (processparams->process_list != NULL) {
 			DWORD pid = get_packet_pid(&data.addr, data.packet, data.packet_len);
-			if (!is_pid_in_map(processparams->pid_map, pid) && pid != 0) {
-				if (DEBUG) { printf("Debug: PID %ld is not monitored, dropping related packet to it.\n", pid); }
-				// Reinject these packets back as is, if it's valid
+			if (processparams->pid_map != NULL && !is_pid_in_map(processparams->pid_map, pid)) {
+				if (DEBUG) printf("Debug: PID %ld is not monitored, dropping related packet to it.\n", pid);
+				// Reinject these packets back as is, if they are valid
 				if(data.packet) {
 					reinject_packet(data.handle, data.packet, data.packet_len, &data.addr);
 					free(data.packet);
 					continue;
 				} else {
-					free(data.packet);
 					continue;
 				}
 			}
@@ -1265,7 +1287,7 @@ DWORD WINAPI process_packets(LPVOID arg) {
 					get_source_ip(&data.addr, ip_address);  // Get the source IP
 
 					if (!check_packet_rate_limit(processparams, ip_address, src_port, params->max_tcp_connections)) {
-						if (DEBUG) { printf("Debug: Dropped TCP packet, IP: %s, src port: %d, dest port: %d\n", ip_address, src_port, dest_port); }
+						if (DEBUG) printf("Debug: Dropped TCP packet, IP: %s, src port: %d, dest port: %d\n", ip_address, src_port, dest_port);
 						free(data.packet);  // Drop packet if limit exceeded
 						continue;
 					}
@@ -1286,37 +1308,59 @@ DWORD WINAPI process_packets(LPVOID arg) {
 					get_source_ip(&data.addr, ip_address);  // Get the source IP
 
 					if (!check_packet_rate_limit(processparams, ip_address, src_port, params->max_udp_packets_per_second)) {
-						if (DEBUG) { printf("Debug: Dropped UDP packet, IP: %s, src port: %d, dest port: %d\n", ip_address, src_port, dest_port); }
+						if (DEBUG) printf("Debug: Dropped UDP packet, IP: %s, src port: %d, dest port: %d\n", ip_address, src_port, dest_port);
 						free(data.packet);  // Drop packet if limit exceeded
 						continue;
 					}
 				}
 			}
 		}
+		
+		// Get the NIC index
+		unsigned int if_idx = data.addr.Network.IfIdx;
+		
+		// Find the matching NIC bucket index
+		int nic_index = -1;
+		for (int i = 0; i < args->bucket_count; i++) {
+			if (params->nic_indices[i] == if_idx) {
+				nic_index = i;
+				break;
+			}
+		}
 
-		// Apply token bucket rate limiting
-		TokenBucket *bucket = (data.addr.Outbound && args->upload_bucket.rate > 0) 
-							  ? &args->upload_bucket 
-							  : ((args->download_bucket.rate > 0) ? &args->download_bucket : NULL);
+		// If the NIC is not managed, skip processing
+		// (this should not be needed, as it's already handled in the previous thread,
+		// but a double check never hurts, to make sure)
+		if (nic_index == -1) {
+			free(data.packet);
+			continue;
+		}
+
+		// Select the correct token bucket
+		TokenBucket *bucket = NULL;
+		if (data.addr.Outbound) {
+			bucket = (params->upload_limits[nic_index] > 0) ? &args->upload_buckets[nic_index] : NULL;
+		} else {
+			bucket = (params->download_limits[nic_index] > 0) ? &args->download_buckets[nic_index] : NULL;
+		}
 
 		if (bucket != NULL) {
-			if (DEBUG) { printf("Debug: Rate before update: %.2f\n", bucket->rate); }
+			if (DEBUG) printf("Debug: Rate before update: %.2f\n", bucket->rate);
 			token_bucket_update(bucket);
 
-			if (DEBUG) { printf("Debug: Bucket Rate: %.2f, Tokens Available: %.2f\n", bucket->rate, bucket->tokens); }
+			if (DEBUG) printf("Debug: Bucket Rate: %.2f, Tokens Available: %.2f\n", bucket->rate, bucket->tokens);
 
 			// Consume tokens from the bucket (if enough tokens available)
 			int retry_count = 5;  // Allow up to 5 retries
+			int elapsed_time = 0;
 
-			while (retry_count > 0) {
+			while (retry_count > 0 && elapsed_time < 500) {  // 500ms max wait
 				if (token_bucket_consume(bucket, data.packet_len)) {
-					break;  // Success, send packet
+					break;
 				}
-
-				int delay_time = (int)(1000.0 * (data.packet_len / bucket->rate));  // Estimate delay
-				delay_time = max(delay_time, 5);  // Ensure at least 5ms delay
-
+				int delay_time = min(max((int)(1000.0 * (data.packet_len / bucket->rate)), 5), 100);
 				non_blocking_delay(delay_time);
+				elapsed_time += delay_time;
 				retry_count--;
 			}
 
@@ -1334,7 +1378,7 @@ DWORD WINAPI process_packets(LPVOID arg) {
 				continue;
 			}
 
-			if (DEBUG) { printf("Debug: Tokens remaining after consumption: %.2f\n", bucket->tokens); }
+			if (DEBUG) printf("Debug: Tokens remaining after consumption: %.2f\n", bucket->tokens);
 		}
 
 		// Simulate packet loss
@@ -1349,14 +1393,13 @@ DWORD WINAPI process_packets(LPVOID arg) {
 		}
 
 		// Reinject the processed packet
-		if (DEBUG) { printf("Debug: Reinjecting packet of size %lu\n", data.packet_len); }
-		
+		if (DEBUG) printf("Debug: Reinjecting packet of size %lu\n", data.packet_len);
+
 		// Only reinject valid packet data
 		if(data.packet) {
 			reinject_packet(data.handle, data.packet, data.packet_len, &data.addr);
 			free(data.packet);
 		} else {
-			free(data.packet);
 			continue;  // Skip further processing for invalid packet
 		}
 	}
@@ -1388,16 +1431,16 @@ void stop_windivert() {
 	if (QueryServiceStatusEx(hService, SC_STATUS_PROCESS_INFO, (LPBYTE)&status, sizeof(SERVICE_STATUS_PROCESS), &bytesNeeded)) {
 		// Check if the service is running
 		if (status.dwCurrentState == SERVICE_RUNNING) {
-			if (!QUIET) { printf("The WinDivert service is running, stopping it...\n"); }
+			if (!QUIET) printf("The WinDivert service is running, stopping it...\n");
 
 			// Stop the service
 			if (ControlService(hService, SERVICE_CONTROL_STOP, (LPSERVICE_STATUS)&status)) {
-				if (!QUIET) { printf("The WinDivert service stopped successfully.\n"); }
+				if (!QUIET) printf("The WinDivert service stopped successfully.\n");
 			} else {
 				printf("Failed to stop the WinDivert service: (%d)\n", GetLastError());
 			}
 		} else {
-			if (!QUIET) { printf("WinDivert service is not running.\n"); }
+			if (!QUIET) printf("WinDivert service is not running.\n");
 		}
 	} else {
 		printf("QueryServiceStatusEx failed (%d)\n", GetLastError());
@@ -1411,32 +1454,30 @@ void stop_windivert() {
 // Thread function for updating PIDs of processes
 DWORD WINAPI exit_key(LPVOID arg) {
 	ThreadArgs *args = (ThreadArgs *)arg;
+	HWND hwnd = GetConsoleWindow(); // Get handle to the console window
 
-	while (1) {
-		if (GetAsyncKeyState('Q') & 0x8000) {
-			if (!QUIET) { printf("\nExiting bandwidth throttler...\n"); }
+    while (InterlockedCompareExchange(&running, 0, 0)) { // Check running flag
+        if (GetForegroundWindow() == hwnd && (GetAsyncKeyState('Q') & 0x8000)) {
+            if (!QUIET) printf("\nExiting bandwidth throttler...\n");
 
-			// Signal all threads to stop
-			InterlockedExchange(&running, 0);
-			break;
-		}
+            // Signal all threads to stop
+            InterlockedExchange(&running, 0);
+			InterlockedExchange(&pid_thread_running, 0);
+            break;
+        }
 
-		// Check if Ctrl+C is pressed or other threads are set to close
-		if (running == 0) {
-			break; // Exit thread if running flag is set to 0 by Ctrl+C
-		}
+        Sleep(10);
+    }
 
-		Sleep(100); // Reduce CPU usage
-	}
-
-	return 0;
+    return 0;
 }
 
 // Handler for control events (like Ctrl+C)
 BOOL ctrl_handler(DWORD fdwCtrlType) {
 	if (fdwCtrlType == CTRL_C_EVENT) {
-		if (!QUIET) { printf("Ctrl+C pressed, stopping...\n"); }
+		if (!QUIET) printf("Ctrl+C pressed, stopping...\n");
 		InterlockedExchange(&running, 0);  // Set running flag to 0
+		InterlockedExchange(&pid_thread_running, 0);  // Set pid_thread_running flag to 0
 		return TRUE;
 	}
 	return FALSE;
@@ -1446,14 +1487,14 @@ BOOL ctrl_handler(DWORD fdwCtrlType) {
 const char *get_program_name(const char *path) {
 	const char *name = strrchr(path, '\\'); // Look for last backslash (Windows path)
 	if (!name) name = strrchr(path, '/');   // Look for last slash (POSIX path)
-	if (name) name++;					    // Skip the slash
-	else name = path;					    // No slashes, use the whole path
+	if (name) name++;                       // Skip the slash
+	else name = path;                       // No slashes, use the whole path
 
 	// Remove the ".exe" extension if present
 	char *ext = strstr(name, ".exe");
 	if (ext && ext == name + strlen(name) - 4) { // Ensure ".exe" is at the end
-		static char buffer[MAX_PATH];		     // Static buffer for the program name
-		strncpy(buffer, name, ext - name);	     // Copy without ".exe"
+		static char buffer[MAX_PATH];            // Static buffer for the program name
+		strncpy(buffer, name, ext - name);       // Copy without ".exe"
 		buffer[ext - name] = '\0';
 		return buffer;
 	}
@@ -1479,6 +1520,7 @@ void print_help(const char *program_path) {
 	printf("  -L, --latency <ms>                           Set the latency in milliseconds (default: 0 = no latency)\n");
 	printf("  -m, --packet-loss <float>                    Set the packet loss in percentage (default: 0.00 = no loss)\n");
 	printf("  -n, --nic <interface_index>                  Throttle traffic for the specified network interfaces (comma-separated)\n");
+	printf("            <NIC_INDEX:DL_RATE:UL_RATE>        For different global download and upload rate limits per NIC\n");
 	printf("  -l, --list-nics                              List all available network interfaces\n");
 	printf("  -d, --debug                                  Display more informational messages (in case of issues)\n");
 	printf("  -q, --quiet                                  Do not display any messages (except errors)\n");
@@ -1502,7 +1544,7 @@ int main(int argc, char *argv[]) {
 
 	// Set up the control handler
 	if (!SetConsoleCtrlHandler((PHANDLER_ROUTINE)ctrl_handler, TRUE)) {
-		if (!ERRORS) { fprintf(stderr, "Failed to set control handler\n"); }
+		if (!ERRORS) fprintf(stderr, "Failed to set control handler\n");
 		return 1;
 	}
 
@@ -1518,6 +1560,8 @@ int main(int argc, char *argv[]) {
 		.packet_loss = 0.00f,
 		.nic_indices = NULL,
 		.nic_count = 0,
+		.download_limits = 0,
+		.upload_limits = 0,
 		.max_tcp_connections = 0,
 		.max_udp_packets_per_second = 0
 	};
@@ -1564,7 +1608,7 @@ int main(int argc, char *argv[]) {
 		} else if ((strcmp(argv[i], "--priority") == 0 || strcmp(argv[i], "-P") == 0) && i + 1 < argc) {
 			params.priority = atoi(argv[++i]);
 			if (params.priority < WINDIVERT_PRIORITY_LOWEST || params.priority > WINDIVERT_PRIORITY_HIGHEST) {
-				if (!ERRORS) { fprintf(stderr, "Error: Priority must be between %d and %d.\n", WINDIVERT_PRIORITY_LOWEST, WINDIVERT_PRIORITY_HIGHEST); }
+				if (!ERRORS) fprintf(stderr, "Error: Priority must be between %d and %d.\n", WINDIVERT_PRIORITY_LOWEST, WINDIVERT_PRIORITY_HIGHEST);
 				return EXIT_FAILURE;
 			}
 		} else if ((strcmp(argv[i], "--packet-buffer") == 0 || strcmp(argv[i], "-b") == 0) && i + 1 < argc) {
@@ -1604,62 +1648,56 @@ int main(int argc, char *argv[]) {
 	}
 
 	// Validate required parameters
-	if (!params.download_rate && !params.upload_rate) {
-		if (!ERRORS) { fprintf(stderr, "Error: At least one of --download or --upload must be specified.\n"); }
-		print_help(argv[0]);
-		return EXIT_FAILURE;
-	}
-
 	if (params.download_rate < 0 || params.upload_rate < 0) {
-		if (!ERRORS) { fprintf(stderr, "Error: Download/Upload speed limit must not be negative.\n"); }
+		if (!ERRORS) fprintf(stderr, "Error: Download/Upload speed limit must not be negative.\n");
 		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 
 	if (params.nic_count == 0) {
-		if (!ERRORS) { fprintf(stderr, "Error: You must specify at least one NIC index with --nic.\n"); }
+		if (!ERRORS) fprintf(stderr, "Error: You must specify at least one NIC index with --nic.\n");
 		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 
 	if (params.max_buffer_size < 0 || params.max_buffer_size > DEFAULT_MAX_BUFFER) {
-		if (!ERRORS) { fprintf(stderr, "Error: Packet buffer size must be between 0 and %d.\n", DEFAULT_MAX_BUFFER); }
+		if (!ERRORS) fprintf(stderr, "Error: Packet buffer size must be between 0 and %d.\n", DEFAULT_MAX_BUFFER);
 		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 
 	if (params.download_buffer_size < 0) {
-		if (!ERRORS) { fprintf(stderr, "Error: Download buffer size must not be negative.\n"); }
+		if (!ERRORS) fprintf(stderr, "Error: Download buffer size must not be negative.\n");
 		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 
 	if (params.upload_buffer_size < 0) {
-		if (!ERRORS) { fprintf(stderr, "Error: Upload buffer size must not be negative.\n"); }
+		if (!ERRORS) fprintf(stderr, "Error: Upload buffer size must not be negative.\n");
 		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 
 	if (params.max_tcp_connections  < 0) {
-		if (!ERRORS) { fprintf(stderr, "Error: The max TCP connection number cannot be negative.\n"); }
+		if (!ERRORS) fprintf(stderr, "Error: The max TCP connection number cannot be negative.\n");
 		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 	
 	if (params.max_udp_packets_per_second  < 0) {
-		if (!ERRORS) { fprintf(stderr, "Error: The max UDP connection number cannot be negative.\n"); }
+		if (!ERRORS) fprintf(stderr, "Error: The max UDP connection number cannot be negative.\n");
 		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 
 	if (params.packet_loss < 0.00f || params.packet_loss > 100.00f) {
-		if (!ERRORS) { fprintf(stderr, "Error: Packet loss percentage must be between 0 and 100.\n"); }
+		if (!ERRORS) fprintf(stderr, "Error: Packet loss percentage must be between 0 and 100.\n");
 		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 
 	if (params.latency_ms < 0) {
-		if (!ERRORS) { fprintf(stderr, "Error: Latency must not be negative.\n"); }
+		if (!ERRORS) fprintf(stderr, "Error: Latency must not be negative.\n");
 		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
@@ -1729,27 +1767,35 @@ int main(int argc, char *argv[]) {
 	if (processparams.process_list != NULL) {
 		// Parse process list and resolve to PIDs
 		int process_count = 0;
-		char **processes = parse_processes(processparams.process_list, &process_count);
+		char *process_list_copy = strdup(processparams.process_list);
+		if (process_list_copy == NULL) {
+			if (!ERRORS) fprintf(stderr, "Memory allocation failed!\n");
+			exit(EXIT_FAILURE);
+		}
+		char **processes = parse_processes(process_list_copy, &process_count);
+		free(process_list_copy);  // Free the copy after parsing
 
 		// Resolve PIDs and add to hash map
 		for (int i = 0; i < process_count; i++) {
+			if (DEBUG) printf("Debug: Processing: '%s'\n", processes[i]);
+
 			int *pid_list = NULL;
 			int pid_count = get_pids_from_name(processes[i], &pid_list);
 
 			if (pid_count > 0) {
 				for (int j = 0; j < pid_count; j++) {
 					add_pid_to_map(&processparams.pid_map, pid_list[j]);
-					if (!QUIET) { printf("Added PID %d for process '%s' to the hash map.\n", pid_list[j], processes[i]); }
+					if (!QUIET) printf("Added PID '%d' for process '%s' to the hash map.\n", pid_list[j], processes[i]);
 				}
 			} else {
-				if (!ERRORS) { fprintf(stderr, "Warning: Could not resolve PIDs for process '%s'.\n", processes[i]); }
-			}			
+				if (!ERRORS) fprintf(stderr, "Warning: Could not resolve PIDs for process '%s'.\n", processes[i]);
+			}
 			free(pid_list);
 			free(processes[i]);
 		}
 		free(processes);
 	} else {
-		if (!QUIET) { printf("No processes were specified. Global bandwidth throttling will apply.\n"); }
+		if (!QUIET) printf("No processes were specified. Global bandwidth throttling will apply.\n");
 	}
 
 	// Initialize lock-free queue
@@ -1765,16 +1811,36 @@ int main(int argc, char *argv[]) {
 		.processparams = &processparams
 	};
 
-	// Initialize token buckets
-	if (!token_bucket_init(&args.download_bucket, params.download_rate, params.download_buffer_size) ||
-		!token_bucket_init(&args.upload_bucket, params.upload_rate, params.upload_buffer_size)) {
-		if (!ERRORS) { fprintf(stderr, "Failed to initialize token buckets.\n"); }
-		goto cleanup_final;
+	// Allocate token buckets for each NIC
+	args.download_buckets = malloc(params.nic_count * sizeof(TokenBucket));
+	args.upload_buckets = malloc(params.nic_count * sizeof(TokenBucket));
+
+	if (!args.download_buckets || !args.upload_buckets) {
+		if (!ERRORS) fprintf(stderr, "Memory allocation failed for the token buckets.\n");
+
+		// Cleanup in case one allocation succeeded but the other failed
+		goto cleanup_final2;
 	}
+
+	for (int i = 0; i < params.nic_count; i++) {
+		// If it is not set, use the global download and upload rate instead
+		if (params.download_limits[i] == 0) {
+			params.download_limits[i] = params.download_rate;
+		}
+		if (params.upload_limits[i] == 0) {
+			params.upload_limits[i] = params.upload_rate;
+		}
+		if (!token_bucket_init(&args.download_buckets[i], params.download_limits[i], params.download_buffer_size) ||
+		    !token_bucket_init(&args.upload_buckets[i], params.upload_limits[i], params.upload_buffer_size)) {
+				if (!ERRORS) fprintf(stderr, "Failed to initialize token buckets.\n");
+				goto cleanup_final;
+			}
+	}
+	args.bucket_count = params.nic_count;
 
     // Initialize mutex for rate limit with error handling
     if (!InitializeCriticalSectionAndSpinCount(&processparams.rate_limit_lock, 4000)) {
-        if (!ERRORS) { fprintf(stderr, "Failed to initialize critical section.\n"); }
+        if (!ERRORS) fprintf(stderr, "Failed to initialize critical section.\n");
         goto cleanup_final;
     }
 
@@ -1786,19 +1852,19 @@ int main(int argc, char *argv[]) {
 
     // Check if any thread creation failed
 	if (!capture_thread) {
-		if (!ERRORS) { fprintf(stderr, "Failed to create the capture thread.\n"); }
+		if (!ERRORS) fprintf(stderr, "Failed to create the capture thread.\n");
 		goto cleanup_threads;
 	}
 	if (!pid_thread) {
-		if (!ERRORS) { fprintf(stderr, "Failed to create the PID thread.\n"); }
+		if (!ERRORS) fprintf(stderr, "Failed to create the PID thread.\n");
 		goto cleanup_threads;
 	}
 	if (!process_thread) {
-		if (!ERRORS) { fprintf(stderr, "Failed to create the process thread.\n"); }
+		if (!ERRORS) fprintf(stderr, "Failed to create the process thread.\n");
 		goto cleanup_threads;
 	}
 	if (!exit_thread) {
-		if (!ERRORS) { fprintf(stderr, "Failed to create the exit thread.\n"); }
+		if (!ERRORS) fprintf(stderr, "Failed to create the exit thread.\n");
 		goto cleanup_threads;
 	}
 
@@ -1822,13 +1888,19 @@ int main(int argc, char *argv[]) {
 
 	cleanup_final:
 		// Destroy token buckets
-		token_bucket_destroy(&args.download_bucket);
-		token_bucket_destroy(&args.upload_bucket);
+		for (int i = 0; i < params.nic_count; i++) {
+			token_bucket_destroy(&args.download_buckets[i]);
+			token_bucket_destroy(&args.upload_buckets[i]);
+		}
 
 
 	cleanup_final2:
 		// Destroy queue
 		destroy_queue(&queue);
+
+		// Destroy token buckets
+		free(args.download_buckets);
+		free(args.upload_buckets);
 
 		// Other cleanup
 		WSACleanup();
