@@ -38,8 +38,6 @@
 #include <ws2tcpip.h>
 #include <psapi.h>
 #include <iphlpapi.h>
-#include <tlhelp32.h>
-#include <signal.h>
 
 // Third-party or external libraries
 #include "windivert.h"
@@ -76,51 +74,6 @@ typedef struct {
 } PIDEntry;
 
 // Structures for Packet Parsing (parsing IP, TCP, and UDP packets)
-typedef struct {
-	BYTE HeaderLength : 4;
-	BYTE Version : 4;
-	BYTE TypeOfService;
-	USHORT TotalLength;
-	USHORT Identification;
-	USHORT FragmentOffset;
-	BYTE TimeToLive;
-	BYTE Protocol;
-	USHORT HeaderChecksum;
-	DWORD SourceAddress;
-	DWORD DestinationAddress;
-} IPV4_HEADER;
-
-typedef struct {
-	BYTE Version : 4;
-	BYTE TrafficClass : 8;
-	UINT FlowLabel : 20;
-	USHORT PayloadLength;
-	BYTE NextHeader;
-	BYTE HopLimit;
-	UCHAR SourceAddress[16];       // IPv6 address is 16 bytes
-	UCHAR DestinationAddress[16];  // IPv6 address is 16 bytes
-} IPV6_HEADER;
-
-typedef struct {
-	USHORT SourcePort;
-	USHORT DestPort;
-	ULONG SequenceNumber;
-	ULONG AcknowledgmentNumber;
-	BYTE DataOffset : 4;
-	BYTE Reserved : 4;
-	BYTE Flags;
-	USHORT Window;
-	USHORT Checksum;
-	USHORT UrgentPointer;
-} TCP_HEADER;
-
-typedef struct {
-	USHORT SourcePort;
-	USHORT DestPort;
-	USHORT Length;
-	USHORT Checksum;
-} UDP_HEADER;
-
 typedef struct {
 	char ip[INET_ADDRSTRLEN];  // IP address as key
 	UINT port;
@@ -187,6 +140,7 @@ typedef struct {
 	TokenBucket *upload_buckets;
 	int bucket_count;
 } ThreadArgs;
+
 
 ///
 /// GLOBAL VARIABLES
@@ -272,86 +226,78 @@ DWORD find_udp_pid(UINT16 port) {
 	return 0; // PID not found
 }
 
-// Function to convert a UINT32 IP address to a string
-void ip_to_string(UINT32 ip, char *ip_str) {
-	snprintf(ip_str, INET_ADDRSTRLEN, "%u.%u.%u.%u",
-			 (ip >> 24) & 0xFF,
-			 (ip >> 16) & 0xFF,
-			 (ip >> 8) & 0xFF,
-			 ip & 0xFF);
+// Function to convert an IPv4 address (UINT32) to a string
+void ip_to_string_ipv4(UINT32 ip, char *ip_str) {
+    snprintf(ip_str, INET_ADDRSTRLEN, "%u.%u.%u.%u",
+             (ip >> 24) & 0xFF,
+             (ip >> 16) & 0xFF,
+             (ip >> 8) & 0xFF,
+             ip & 0xFF);
 }
 
-// Function to get the source IP address
+// Function to convert an IPv6 address (16-byte array) to a string
+void ip_to_string_ipv6(const UINT32 *ip, char *ip_str) {
+    snprintf(ip_str, INET6_ADDRSTRLEN,
+             "%x:%x:%x:%x:%x:%x:%x:%x",
+             ntohs(ip[0]), ntohs(ip[1]), ntohs(ip[2]), ntohs(ip[3]),
+             ntohs(ip[4]), ntohs(ip[5]), ntohs(ip[6]), ntohs(ip[7]));
+}
+
+// Function to get the source IP address, supporting both IPv4 and IPv6
 void get_source_ip(const WINDIVERT_ADDRESS *addr, char *ip_str) {
-	ip_to_string(addr->Flow.LocalAddr[0], ip_str);  // Access source address in Flow
+    if (addr->Flow.LocalAddr[0] != 0) {  // Check for IPv4
+        ip_to_string_ipv4(addr->Flow.LocalAddr[0], ip_str);  // For IPv4
+    } else {
+        ip_to_string_ipv6((const UINT32 *)addr->Flow.LocalAddr, ip_str);  // For IPv6
+    }
 }
 
-// Function to get the destination IP address
+// Function to get the destination IP address, supporting both IPv4 and IPv6
 void get_dest_ip(const WINDIVERT_ADDRESS *addr, char *ip_str) {
-	ip_to_string(addr->Flow.RemoteAddr[0], ip_str);  // Access destination address in Flow
+    if (addr->Flow.RemoteAddr[0] != 0) {  // Check for IPv4
+        ip_to_string_ipv4(addr->Flow.RemoteAddr[0], ip_str);  // For IPv4
+    } else {
+        ip_to_string_ipv6((const UINT32 *)addr->Flow.RemoteAddr, ip_str);  // For IPv6
+    }
 }
 
 // Helper function to extract the protocol and port information from the packet
 int get_packet_protocol_and_port(const char *packet, unsigned int packet_len, UINT *src_port, UINT *dest_port, BYTE *protocol) {
-	// Check if it's an IPv4 or IPv6 packet
-	if (packet_len < sizeof(IPV4_HEADER) && packet_len < sizeof(IPV6_HEADER)) {
-		return 0; // Invalid packet size
-	}
+    PWINDIVERT_IPHDR ipHdr = NULL;
+    PWINDIVERT_IPV6HDR ipv6Hdr = NULL;
+    PWINDIVERT_TCPHDR tcpHdr = NULL;
+    PWINDIVERT_UDPHDR udpHdr = NULL;
 
-	// Check for IPv4 packet
-	if (packet_len >= sizeof(IPV4_HEADER)) {
-		const IPV4_HEADER *ipv4 = (const IPV4_HEADER *)packet;
-		if (ipv4->Protocol != IPPROTO_TCP && ipv4->Protocol != IPPROTO_UDP) {
-			return 0; // Only handle TCP/UDP packets
-		}
+    // Use WinDivert helper to parse the packet
+    if (!WinDivertHelperParsePacket((PVOID)packet, packet_len, &ipHdr, &ipv6Hdr, protocol, NULL, NULL, &tcpHdr, &udpHdr, NULL, NULL, NULL, NULL)) {
+        return 0; // Failed to parse the packet
+    }
 
-		UINT ip_header_len = (ipv4->HeaderLength) * 4;
-		if (packet_len < ip_header_len) {
-			return 0; // Packet too short
-		}
+    // Check for IPv4 packet
+    if (ipHdr != NULL) {
+        if (*protocol == IPPROTO_TCP) {
+            *src_port = ntohs(tcpHdr->SrcPort);
+            *dest_port = ntohs(tcpHdr->DstPort);
+        } else if (*protocol == IPPROTO_UDP) {
+            *src_port = ntohs(udpHdr->SrcPort);
+            *dest_port = ntohs(udpHdr->DstPort);
+        }
+        return 1; // Successfully extracted protocol and ports
+    }
 
-		const void *transport_header = packet + ip_header_len;
+    // Check for IPv6 packet
+    if (ipv6Hdr != NULL) {
+        if (*protocol == IPPROTO_TCP) {
+            *src_port = ntohs(tcpHdr->SrcPort);
+            *dest_port = ntohs(tcpHdr->DstPort);
+        } else if (*protocol == IPPROTO_UDP) {
+            *src_port = ntohs(udpHdr->SrcPort);
+            *dest_port = ntohs(udpHdr->DstPort);
+        }
+        return 1; // Successfully extracted protocol and ports
+    }
 
-		// Get ports for TCP/UDP
-		if (ipv4->Protocol == IPPROTO_TCP) {
-			const TCP_HEADER *tcp = (const TCP_HEADER *)transport_header;
-			*src_port = ntohs(tcp->SourcePort);
-			*dest_port = ntohs(tcp->DestPort);
-			*protocol = IPPROTO_TCP;
-		} else if (ipv4->Protocol == IPPROTO_UDP) {
-			const UDP_HEADER *udp = (const UDP_HEADER *)transport_header;
-			*src_port = ntohs(udp->SourcePort);
-			*dest_port = ntohs(udp->DestPort);
-			*protocol = IPPROTO_UDP;
-		}
-		return 1; // Successfully extracted protocol and ports
-	}
-
-	// Check for IPv6 packet
-	if (packet_len >= sizeof(IPV6_HEADER)) {
-		const IPV6_HEADER *ipv6 = (const IPV6_HEADER *)packet;
-		if (ipv6->NextHeader != IPPROTO_TCP && ipv6->NextHeader != IPPROTO_UDP) {
-			return 0; // Only handle TCP/UDP packets
-		}
-
-		const void *transport_header = packet + sizeof(IPV6_HEADER);
-
-		// Get ports for TCP/UDP
-		if (ipv6->NextHeader == IPPROTO_TCP) {
-			const TCP_HEADER *tcp = (const TCP_HEADER *)transport_header;
-			*src_port = ntohs(tcp->SourcePort);
-			*dest_port = ntohs(tcp->DestPort);
-			*protocol = IPPROTO_TCP;
-		} else if (ipv6->NextHeader == IPPROTO_UDP) {
-			const UDP_HEADER *udp = (const UDP_HEADER *)transport_header;
-			*src_port = ntohs(udp->SourcePort);
-			*dest_port = ntohs(udp->DestPort);
-			*protocol = IPPROTO_UDP;
-		}
-		return 1; // Successfully extracted protocol and ports
-	}
-
-	return 0; // Unrecognized packet
+    return 0; // Unrecognized packet
 }
 
 // Function to get the PID of a packet
@@ -460,12 +406,6 @@ void token_bucket_update(TokenBucket *bucket) {
 	LeaveCriticalSection(&bucket->lock);
 }
 
-// Function to check if there are enough tokens for a packet
-int token_bucket_has_enough_tokens(TokenBucket *bucket, int packet_size) {
-	// Check if the number of tokens is enough to handle the packet size
-	return bucket->tokens >= packet_size;
-}
-
 // Function to consume tokens from the bucket
 bool token_bucket_consume(TokenBucket *bucket, int packet_size) {
 	bool success = false;
@@ -491,7 +431,7 @@ void token_bucket_destroy(TokenBucket *bucket) {
 
 
 ///
-/// FUNCTIONS
+/// PACKET-RELATED FUNCTIONS
 ///
 
 // Function to capture packet
@@ -593,6 +533,28 @@ uint8_t *strip_reinject_flag(uint8_t *packet, unsigned int *len) {
     return packet;  // Return the same pointer with the new length
 }
 
+// Function to decide if a packet should be dropped due to packet loss
+bool should_drop_packet(HANDLE handle, char *packet, unsigned int packet_len, WINDIVERT_ADDRESS addr, float packet_loss) {
+	if (packet_loss > 0.00f) {
+		float rand_value = (float)rand() / (float)RAND_MAX;  // Generate a random float between 0.0 and 1.0
+		if (rand_value < (packet_loss / 100.0f)) {
+			if (DEBUG) printf("Debug: Dropped packet to simulate loss (%.2f%%)\n", packet_loss);
+			return true;  // Drop the packet
+		}
+	}
+	return false;  // No packet loss, process normally
+}
+
+// Log packet information (for debugging)
+//void log_packet(const char *direction, const TokenBucket *bucket, unsigned int packet_len) {
+//	printf("[%s] Packet size: %u, Tokens: %.2f\n", direction, packet_len, (double)bucket->tokens);
+//}
+
+
+///
+/// PARSING FUNCTIONS
+///
+
 // Function to parse a rate string with units
 double parse_rate_with_units(const char *rate_str) {
 	char unit[3] = {0}; // To handle two-character units like "Gb", "Mb", etc.
@@ -639,6 +601,119 @@ void print_rate_with_units(const char *label, double rate_bps) {
 		printf("%s: %.2f bps (%.2f Bps)\n", label, rate_bps, rate_bps / 8.0);
 	}
 }
+
+///
+/// Network interface related functions
+///
+
+// Function to list network adapters
+void list_network_interfaces() {
+	PIP_ADAPTER_ADDRESSES adapter_addresses = NULL;
+	ULONG out_buf_len = 0;
+	DWORD dwRetVal = 0;
+
+	// Get the necessary size for the buffer
+	dwRetVal = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, adapter_addresses, &out_buf_len);
+	if (dwRetVal == ERROR_BUFFER_OVERFLOW) {
+		adapter_addresses = (PIP_ADAPTER_ADDRESSES)malloc(out_buf_len);
+		if (adapter_addresses == NULL) {
+			printf("Memory allocation failed\n");
+			exit(EXIT_FAILURE);
+		}
+	} else if (dwRetVal != NO_ERROR) {
+		printf("GetAdaptersAddresses failed with error %lu\n", dwRetVal);
+		return;
+	}
+
+	// Retrieve the list of network adapters
+	dwRetVal = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, adapter_addresses, &out_buf_len);
+	if (dwRetVal != NO_ERROR) {
+		printf("GetAdaptersAddresses failed with error %lu\n", dwRetVal);
+		free(adapter_addresses);
+		return;
+	}
+
+	// Iterate through the adapters and display information
+	PIP_ADAPTER_ADDRESSES adapter = adapter_addresses;
+	int index = 1;  // Start index numbering from 1
+	while (adapter) {
+		printf("Interface Index: %u\n", adapter->IfIndex);           // Display the interface index
+		printf("Interface Name: %s\n", adapter->AdapterName);        // Display the interface name
+		printf("Adapter Description: %ws\n", adapter->Description);  // Description of the adapter
+
+		adapter = adapter->Next;
+		index++;  // Increment the index for each adapter
+		printf("\n");
+	}
+
+	free(adapter_addresses);
+}
+
+// Helper function to parse comma-separated NIC indices
+unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
+    char *copy = strdup(input);
+    if (!copy) {
+        if (!ERRORS) fprintf(stderr, "Memory allocation failed for NIC parsing.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    char *token = strtok(copy, ",");
+    int capacity = 16;
+    int *nic_indices = malloc(capacity * sizeof(int));
+    params->download_limits = malloc(capacity * sizeof(double));
+    params->upload_limits = malloc(capacity * sizeof(double));
+
+    if (!nic_indices || !params->upload_limits || !params->download_limits) {
+        if (!ERRORS) fprintf(stderr, "Memory allocation failed for NIC parameters.\n");
+        free(copy);
+        exit(EXIT_FAILURE);
+    }
+
+    params->nic_count = 0;
+    
+    while (token) {
+        if (params->nic_count >= capacity) {
+            capacity *= 2;
+            int *new_indices = realloc(nic_indices, capacity * sizeof(int));
+            params->download_limits = realloc(params->download_limits, capacity * sizeof(double));
+            params->upload_limits = realloc(params->upload_limits, capacity * sizeof(double));
+            if (!new_indices || !params->download_limits || !params->upload_limits) {
+                if (!ERRORS) fprintf(stderr, "Memory reallocation failed.\n");
+                exit(EXIT_FAILURE);
+            }
+			nic_indices = new_indices;
+        }
+
+        // Parse "NIC_INDEX:DOWNLOAD:UPLOAD"
+        char *nic_part = strtok(token, ":");
+        char *download_part = strtok(NULL, ":");
+        char *upload_part = strtok(NULL, ":");
+
+        nic_indices[params->nic_count] = atoi(nic_part);
+        params->download_limits[params->nic_count] = download_part ? parse_rate_with_units(download_part) : 0;
+		params->upload_limits[params->nic_count] = upload_part ? parse_rate_with_units(upload_part) : 0;
+
+        params->nic_count++;
+        token = strtok(NULL, ",");
+    }
+
+    free(copy);
+	return nic_indices;
+}
+
+// Function to check if a NIC index is in the target list
+bool is_nic_index_in_list(ThrottlingParams *params, unsigned int nic_index) {
+	for (int i = 0; i < params->nic_count; i++) {
+		if (params->nic_indices[i] == nic_index) {
+			return true;
+		}
+	}
+	return false;
+}
+
+///
+/// PID and process-related functions
+///
 
 // Function to add a PID to the hash map
 void add_pid_to_map(PIDEntry **pid_map, int pid) {
@@ -736,111 +811,6 @@ char **parse_processes(char *input, int *count) {
 	return processes;
 }
 
-// Function to list network adapters
-void list_network_interfaces() {
-	PIP_ADAPTER_ADDRESSES adapter_addresses = NULL;
-	ULONG out_buf_len = 0;
-	DWORD dwRetVal = 0;
-
-	// Get the necessary size for the buffer
-	dwRetVal = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, adapter_addresses, &out_buf_len);
-	if (dwRetVal == ERROR_BUFFER_OVERFLOW) {
-		adapter_addresses = (PIP_ADAPTER_ADDRESSES)malloc(out_buf_len);
-		if (adapter_addresses == NULL) {
-			printf("Memory allocation failed\n");
-			exit(EXIT_FAILURE);
-		}
-	} else if (dwRetVal != NO_ERROR) {
-		printf("GetAdaptersAddresses failed with error %lu\n", dwRetVal);
-		return;
-	}
-
-	// Retrieve the list of network adapters
-	dwRetVal = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, adapter_addresses, &out_buf_len);
-	if (dwRetVal != NO_ERROR) {
-		printf("GetAdaptersAddresses failed with error %lu\n", dwRetVal);
-		free(adapter_addresses);
-		return;
-	}
-
-	// Iterate through the adapters and display information
-	PIP_ADAPTER_ADDRESSES adapter = adapter_addresses;
-	int index = 1;  // Start index numbering from 1
-	while (adapter) {
-		printf("Interface Index: %u\n", adapter->IfIndex);           // Display the interface index
-		printf("Interface Name: %s\n", adapter->AdapterName);        // Display the interface name
-		printf("Adapter Description: %ws\n", adapter->Description);  // Description of the adapter
-
-		adapter = adapter->Next;
-		index++;  // Increment the index for each adapter
-		printf("\n");
-	}
-
-	free(adapter_addresses);
-}
-
-// Helper function to parse comma-separated NIC indices
-unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
-    char *copy = strdup(input);
-    if (!copy) {
-        fprintf(stderr, "Memory allocation failed for NIC parsing.\n");
-        exit(EXIT_FAILURE);
-    }
-
-    char *token = strtok(copy, ",");
-    int capacity = 16;
-    int *nic_indices = malloc(capacity * sizeof(int));
-    params->download_limits = malloc(capacity * sizeof(double));
-    params->upload_limits = malloc(capacity * sizeof(double));
-
-    if (!nic_indices || !params->upload_limits || !params->download_limits) {
-        fprintf(stderr, "Memory allocation failed for NIC parameters.\n");
-        free(copy);
-        exit(EXIT_FAILURE);
-    }
-
-    params->nic_count = 0;
-    
-    while (token) {
-        if (params->nic_count >= capacity) {
-            capacity *= 2;
-            int *new_indices = realloc(nic_indices, capacity * sizeof(int));
-            params->download_limits = realloc(params->download_limits, capacity * sizeof(double));
-            params->upload_limits = realloc(params->upload_limits, capacity * sizeof(double));
-            if (!new_indices || !params->download_limits || !params->upload_limits) {
-                fprintf(stderr, "Memory reallocation failed.\n");
-                exit(EXIT_FAILURE);
-            }
-			nic_indices = new_indices;
-        }
-
-        // Parse "NIC_INDEX:DOWNLOAD:UPLOAD"
-        char *nic_part = strtok(token, ":");
-        char *download_part = strtok(NULL, ":");
-        char *upload_part = strtok(NULL, ":");
-
-        nic_indices[params->nic_count] = atoi(nic_part);
-        params->download_limits[params->nic_count] = download_part ? parse_rate_with_units(download_part) : 0;
-		params->upload_limits[params->nic_count] = upload_part ? parse_rate_with_units(upload_part) : 0;
-
-        params->nic_count++;
-        token = strtok(NULL, ",");
-    }
-
-    free(copy);
-	return nic_indices;
-}
-
-// Function to check if a NIC index is in the target list
-bool is_nic_index_in_list(ThrottlingParams *params, unsigned int nic_index) {
-	for (int i = 0; i < params->nic_count; i++) {
-		if (params->nic_indices[i] == nic_index) {
-			return true;
-		}
-	}
-	return false;
-}
-
 // Function to parse the process update interval (packets or time)
 int parse_process_update_interval(const char *input, ProcessParams *processparams) {
 	size_t len = strlen(input);
@@ -883,6 +853,7 @@ int parse_process_update_interval(const char *input, ProcessParams *processparam
 	return 0; // Success
 }
 
+// Functino to get the name of the process from its PID
 int get_process_name_from_pid(DWORD pid, char *process_name, size_t name_size) {
 	HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
 	if (!hProcess) {
@@ -902,18 +873,6 @@ int get_process_name_from_pid(DWORD pid, char *process_name, size_t name_size) {
 	return 1;
 }
 
-// Function to decide if a packet should be dropped due to packet loss
-bool should_drop_packet(HANDLE handle, char *packet, unsigned int packet_len, WINDIVERT_ADDRESS addr, float packet_loss) {
-	if (packet_loss > 0.00f) {
-		float rand_value = (float)rand() / (float)RAND_MAX;  // Generate a random float between 0.0 and 1.0
-		if (rand_value < (packet_loss / 100.0f)) {
-			if (DEBUG) printf("Debug: Dropped packet to simulate loss (%.2f%%)\n", packet_loss);
-			return true;  // Drop the packet
-		}
-	}
-	return false;  // No packet loss, process normally
-}
-
 // Function to check if a PID exists
 bool is_process_alive(int pid) {
     HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
@@ -928,7 +887,7 @@ bool is_process_alive(int pid) {
     return false;
 }
 
-// Function to update the PIDs
+// Function to update the PIDs (remove stale PIDs and add new ones)
 void update_pid_map(ProcessParams *processparams) {
 	if (!processparams->process_list) return;
 
@@ -1027,7 +986,7 @@ void non_blocking_delay(int delay_ms) {
 }
 
 ///
-/// QUEUE
+/// LOCK-FREE QUEUE
 ///
 
 // Initialize lock-free queue
@@ -1108,12 +1067,22 @@ bool is_queue_full(LockFreeQueue *queue) {
 
 // Cleanup function for queue
 void destroy_queue(LockFreeQueue *queue) {
-    for (size_t i = 0; i < queue->capacity; i++) {
-        free(queue->queue[i].packet);
+    if (!queue || !queue->queue) return;
+
+    LONG head = queue->head;
+    LONG tail = queue->tail;
+
+    while (head != tail) {
+        free(queue->queue[head].packet);
+        queue->queue[head].packet = NULL;
+        head = (head + 1) % queue->capacity;
     }
+
     free(queue->queue);
     queue->queue = NULL;
+    queue->head = queue->tail = queue->size = 0;
 }
+
 
 ///
 /// THREADS
@@ -1137,14 +1106,17 @@ DWORD WINAPI capture_packets(LPVOID arg) {
 	data.handle = WinDivertOpen("ip or tcp or udp", WINDIVERT_LAYER_NETWORK, params->priority, 0);
 	if (data.handle == INVALID_HANDLE_VALUE && !ERRORS) {
 		DWORD error = GetLastError();
-		switch (error) {
-			case 2:	   fprintf(stderr, "Either one of the WinDivert32.sys or WinDivert64.sys files were not found.\n"); break;
-			case 5:	   fprintf(stderr, "Permission issue: Administrator rights are required.\n"); break;
-			case 87:   fprintf(stderr, "There is an invalid parameter regarding the packet filter string, layer, priority, or flags.\n"); break;
-			case 577:  fprintf(stderr, "The WinDivert32.sys or WinDivert64.sys driver file does not have a valid digital signature.\n"); break;
-			case 1058: fprintf(stderr, "There is a previous WinDivert instance hanging. Quit gracefully now and restart.\n"); break;
-			case 1275: fprintf(stderr, "The driver is blocked! Make sure not to load the 32-bit WinDivert.sys driver on a 64-bit system (or vice versa).\n"); break;
-			default:   fprintf(stderr, "Error opening WinDivert: %lu\n", error);
+		if (!ERRORS) {
+			switch (error) {
+				case 2:	   fprintf(stderr, "Either one of the WinDivert32.sys or WinDivert64.sys files were not found.\n"); break;
+				case 5:	   fprintf(stderr, "Permission issue: Administrator rights are required.\n"); break;
+				case 87:   fprintf(stderr, "There is an invalid parameter regarding the packet filter string, layer, priority, or flags.\n"); break;
+				case 577:  fprintf(stderr, "The WinDivert32.sys or WinDivert64.sys driver file does not have a valid digital signature.\n"); break;
+				case 1058: fprintf(stderr, "There is a previous WinDivert instance hanging. Quit gracefully now and restart.\n"); break;
+				case 1275: fprintf(stderr, "The driver is blocked! Make sure not to load the 32-bit WinDivert.sys driver on a 64-bit system (or vice versa).\n"); break;
+				case 1753: fprintf(stderr, "The Base Filtering Engine (BFE) service is not running! Start it for WinDivert to be able to run!\n"); break;
+				default:   fprintf(stderr, "Error opening WinDivert: %lu\n", error);
+			}
 		}
 		return EXIT_FAILURE;
 	}
@@ -1407,51 +1379,7 @@ DWORD WINAPI process_packets(LPVOID arg) {
 	return 0;
 }
 
-// Stops the WinDivert service
-void stop_windivert() {
-	SC_HANDLE hSCManager;
-	SC_HANDLE hService;
-	SERVICE_STATUS_PROCESS status;
-	DWORD bytesNeeded;
-
-	// Open the service control manager
-	hSCManager = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
-	if (hSCManager == NULL) {
-		printf("OpenSCManager failed (%d)\n", GetLastError());
-	}
-
-	// Open the service
-	hService = OpenService(hSCManager, "WinDivert", SERVICE_QUERY_STATUS | SERVICE_STOP);
-	if (hService == NULL) {
-		printf("OpenService failed (%d)\n", GetLastError());
-		CloseServiceHandle(hSCManager);
-	}
-
-	// Query the service status
-	if (QueryServiceStatusEx(hService, SC_STATUS_PROCESS_INFO, (LPBYTE)&status, sizeof(SERVICE_STATUS_PROCESS), &bytesNeeded)) {
-		// Check if the service is running
-		if (status.dwCurrentState == SERVICE_RUNNING) {
-			if (!QUIET) printf("The WinDivert service is running, stopping it...\n");
-
-			// Stop the service
-			if (ControlService(hService, SERVICE_CONTROL_STOP, (LPSERVICE_STATUS)&status)) {
-				if (!QUIET) printf("The WinDivert service stopped successfully.\n");
-			} else {
-				printf("Failed to stop the WinDivert service: (%d)\n", GetLastError());
-			}
-		} else {
-			if (!QUIET) printf("WinDivert service is not running.\n");
-		}
-	} else {
-		printf("QueryServiceStatusEx failed (%d)\n", GetLastError());
-	}
-
-	// Clean up
-	CloseServiceHandle(hService);
-	CloseServiceHandle(hSCManager);
-}
-
-// Thread function for updating PIDs of processes
+// Handle the exit key ('Q')
 DWORD WINAPI exit_key(LPVOID arg) {
 	ThreadArgs *args = (ThreadArgs *)arg;
 	HWND hwnd = GetConsoleWindow(); // Get handle to the console window
@@ -1470,6 +1398,54 @@ DWORD WINAPI exit_key(LPVOID arg) {
     }
 
     return 0;
+}
+
+///
+/// HELPER FUNCTIONS FOR MAIN
+///
+
+// Stops the WinDivert service
+void stop_windivert() {
+	SC_HANDLE hSCManager;
+	SC_HANDLE hService;
+	SERVICE_STATUS_PROCESS status;
+	DWORD bytesNeeded;
+
+	// Open the service control manager
+	hSCManager = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
+	if (hSCManager == NULL) {
+		if (!ERRORS) printf("OpenSCManager failed (%d)\n", GetLastError());
+	}
+
+	// Open the service
+	hService = OpenService(hSCManager, "WinDivert", SERVICE_QUERY_STATUS | SERVICE_STOP);
+	if (hService == NULL) {
+		if (!ERRORS) printf("OpenService failed (%d)\n", GetLastError());
+		CloseServiceHandle(hSCManager);
+	}
+
+	// Query the service status
+	if (QueryServiceStatusEx(hService, SC_STATUS_PROCESS_INFO, (LPBYTE)&status, sizeof(SERVICE_STATUS_PROCESS), &bytesNeeded)) {
+		// Check if the service is running
+		if (status.dwCurrentState == SERVICE_RUNNING) {
+			if (!QUIET) printf("The WinDivert service is running, stopping it...\n");
+
+			// Stop the service
+			if (ControlService(hService, SERVICE_CONTROL_STOP, (LPSERVICE_STATUS)&status)) {
+				if (!QUIET) printf("The WinDivert service stopped successfully.\n");
+			} else {
+				if (!ERRORS) printf("Failed to stop the WinDivert service: (%d)\n", GetLastError());
+			}
+		} else {
+			if (!QUIET) printf("WinDivert service is not running.\n");
+		}
+	} else {
+		if (!ERRORS) printf("QueryServiceStatusEx failed (%d)\n", GetLastError());
+	}
+
+	// Clean up
+	CloseServiceHandle(hService);
+	CloseServiceHandle(hSCManager);
 }
 
 // Handler for control events (like Ctrl+C)
@@ -1527,11 +1503,6 @@ void print_help(const char *program_path) {
 	printf("  -e, --no-errors                              Do not display any error messages\n");
 	printf("  -h, --help                                   Display this help message and exit\n");
 }
-
-// Log packet information (for debugging)
-//void log_packet(const char *direction, const TokenBucket *bucket, unsigned int packet_len) {
-//	printf("[%s] Packet size: %u, Tokens: %.2f\n", direction, packet_len, (double)bucket->tokens);
-//}
 
 
 ///
@@ -1884,6 +1855,7 @@ int main(int argc, char *argv[]) {
 
 		// Destroy mutex for rate limit
 		DeleteCriticalSection(&processparams.rate_limit_lock);
+		goto cleanup_final;
 
 
 	cleanup_final:
@@ -1892,6 +1864,7 @@ int main(int argc, char *argv[]) {
 			token_bucket_destroy(&args.download_buckets[i]);
 			token_bucket_destroy(&args.upload_buckets[i]);
 		}
+		goto cleanup_final2;
 
 
 	cleanup_final2:
