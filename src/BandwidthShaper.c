@@ -1239,6 +1239,12 @@ int main(int argc, char *argv[]) {
 					Sleep(latency_ms);  // Delay in milliseconds
 				}
 
+				// Ensure packet checksums are valid
+				if (!WinDivertHelperCalcChecksums(packet, packet_len, &addr, 0)) {
+					fprintf(stderr, "Error: Checksum calculation failed. Skipping modified packet...\n");
+					continue;
+				}
+
                 reinject_packet(handle, packet, packet_len, &addr);
 			} else {
                 SleepEx(1, TRUE);  // Yield the CPU while waiting for tokens
