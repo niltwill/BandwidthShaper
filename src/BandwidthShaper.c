@@ -67,10 +67,10 @@ typedef struct {
 
 // Token Bucket Structure
 typedef struct {
-    double rate;              // rate in bytes per second
-    int max_tokens;           // maximum tokens (bucket size)
-    int tokens;               // current tokens
-    DWORD last_checked;       // last time tokens were replenished
+    double rate;            // Tokens added per second
+    int max_tokens;         // Maximum tokens allowed
+    volatile LONG tokens;   // Current number of tokens (atomic)
+    volatile LONGLONG last_checked;  // Last update time (high precision)
 } TokenBucket;
 
 // For Ctrl+C handler to quit
@@ -123,37 +123,57 @@ void print_rate_with_units(const char *label, double rate_bps) {
 	}
 }
 
+static double get_time_seconds() {
+    LARGE_INTEGER freq, counter;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&counter);
+    return (double)counter.QuadPart / freq.QuadPart;
+}
+
 // Function to initialize the token bucket
 bool token_bucket_init(TokenBucket *bucket, double rate, int max_tokens) {
-	if (!bucket) return false;
-	
+    if (!bucket || rate <= 0 || max_tokens <= 0) return false;
+
     bucket->rate = rate;
     bucket->max_tokens = max_tokens;
-    bucket->tokens = max_tokens;  // Start with a full bucket
-    bucket->last_checked = GetTickCount64();  // Get current time
-	
-	return true;
+    bucket->tokens = max_tokens;  // Start with full bucket
+
+    LONGLONG now = get_time_seconds();
+    bucket->last_checked = now;  // Atomic write not needed for simple assignment
+
+    return true;
 }
 
 // Function to update the token bucket (replenish tokens based on time)
 void token_bucket_update(TokenBucket *bucket) {
-    DWORD now = GetTickCount64();
-    DWORD elapsed = now - bucket->last_checked;
+    double now = get_time_seconds();
+    double last = *(volatile double*)&bucket->last_checked;
+    double elapsed = now - last;
 
-    // Replenish tokens based on elapsed time and rate
-    int tokens_to_add = (int)(bucket->rate * (elapsed / 1000.0));  // convert rate to tokens added per ms
-    bucket->tokens = min(bucket->tokens + tokens_to_add, bucket->max_tokens);  // Cap the tokens to max tokens
-    bucket->last_checked = now;  // Update last checked time
+    if (elapsed > 0) {
+        int tokens_to_add = (int)(bucket->rate * elapsed);
+        int new_tokens = min(bucket->tokens + tokens_to_add, bucket->max_tokens);
+        
+        InterlockedExchange(&bucket->tokens, new_tokens);  // Atomic update
+        InterlockedExchange64(&bucket->last_checked, *(volatile LONGLONG*)&now); // Atomic update
+    }
 }
 
 // Function to check if there are enough tokens for a packet
-int token_bucket_has_enough_tokens(TokenBucket *bucket, int packet_size) {
+bool token_bucket_has_enough_tokens(TokenBucket *bucket, int packet_size) {
     return bucket->tokens >= packet_size;
 }
 
 // Function to consume tokens from the bucket
-void token_bucket_consume(TokenBucket *bucket, int packet_size) {
-    bucket->tokens -= packet_size;  // Decrease the tokens by packet size
+bool token_bucket_consume(TokenBucket *bucket, int packet_size) {
+    token_bucket_update(bucket); // Ensure latest token count
+
+    if (!token_bucket_has_enough_tokens(bucket, packet_size)) {
+        return false; // Not enough tokens
+    }
+
+    InterlockedExchangeAdd(&bucket->tokens, -packet_size);  // Atomic subtraction
+    return true;
 }
 
 // Function to reinject the packet into the network
@@ -1106,9 +1126,9 @@ int main(int argc, char *argv[]) {
 
 	// Set up WinDivert
     HANDLE handle;
-    WINDIVERT_ADDRESS addr;
     char packet[MAX_PACKET_SIZE];
     UINT packet_len;
+    WINDIVERT_ADDRESS addr;
 
     // Open WinDivert handle for capturing traffic
     handle = WinDivertOpen("ip or tcp or udp", WINDIVERT_LAYER_NETWORK, priority, 0);
@@ -1136,11 +1156,6 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-		if (addr.Layer != WINDIVERT_LAYER_NETWORK) {
-			//fprintf(stderr, "Invalid address layer: %u\n", addr.Layer);
-			continue;  // Skip reinjection if the layer is invalid (double check)
-		}
-
         // Check for 'Q' key to quit the program
 		HWND hwnd = GetConsoleWindow(); // Get handle to the console window
         if (GetForegroundWindow() == hwnd && (GetAsyncKeyState('Q') & 0x8000)) {
@@ -1154,8 +1169,10 @@ int main(int argc, char *argv[]) {
 			DWORD pid = get_packet_pid(&addr, packet, packet_len);
 			if (processparams.pid_map != NULL && !is_pid_in_map(processparams.pid_map, pid)) {
 				//printf("Debug: PID %ld is not monitored, continuing...\n", pid);
-				reinject_packet(handle, packet, packet_len, &addr);
-				continue;
+				if (pid != 0) {
+					reinject_packet(handle, packet, packet_len, &addr);
+					continue;  // Skip further processing for unmonitored PIDs
+				}
 			}
 		}
 
@@ -1225,46 +1242,31 @@ int main(int argc, char *argv[]) {
 		}
 
 		if (bucket != NULL) {
-			token_bucket_update(bucket);
-			if (token_bucket_has_enough_tokens(bucket, packet_len)) {
-                token_bucket_consume(bucket, packet_len);
-
-				// Simulate packet loss
-				if (should_drop_packet(handle, packet, packet_len, addr, packet_loss)) {
-					continue;
-				}
-
-				// Simulate latency using non-blocking delay
-				if (latency_ms > 0) {
-					Sleep(latency_ms);  // Delay in milliseconds
-				}
-
-				// Ensure packet checksums are valid
-				if (!WinDivertHelperCalcChecksums(packet, packet_len, &addr, 0)) {
-					fprintf(stderr, "Error: Checksum calculation failed. Skipping modified packet...\n");
-					continue;
-				}
-
-                reinject_packet(handle, packet, packet_len, &addr);
-			} else {
-                SleepEx(1, TRUE);  // Yield the CPU while waiting for tokens
-            }
-		}
-
-        // If no limit, reinject the packet
-        if (!download_rate && !upload_rate) {
-			// Simulate packet loss
-			if (should_drop_packet(handle, packet, packet_len, addr, packet_loss)) {
+			token_bucket_update(bucket);  // Refresh token count
+			if (!token_bucket_consume(bucket, packet_len)) {
+				// Not enough tokens, so drop the packet (rate limiting in action)
+				//printf("Packet dropped due to rate limiting: %u bytes\n", packet_len);
 				continue;
 			}
+		}
 
-			// Simulate latency using non-blocking delay
-			if (latency_ms > 0) {
-				Sleep(latency_ms);  // Delay in milliseconds
-			}
+		// Simulate packet loss
+		if (should_drop_packet(handle, packet, packet_len, addr, packet_loss)) {
+			continue;
+		}
 
-            reinject_packet(handle, packet, packet_len, &addr);
-        }
+		// Simulate latency using non-blocking delay
+		if (latency_ms > 0) {
+			Sleep(latency_ms);  // Delay in milliseconds
+		}
+
+		// Ensure packet checksums are valid
+		if (!WinDivertHelperCalcChecksums(packet, packet_len, &addr, 0)) {
+			fprintf(stderr, "Error: Checksum calculation failed. Skipping modified packet...\n");
+			continue;
+		}
+
+		if (packet) reinject_packet(handle, packet, packet_len, &addr);
 
 		// If Ctrl+C was pressed, quit
 		if(quit_program) break;
