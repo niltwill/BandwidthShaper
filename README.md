@@ -1,5 +1,5 @@
 # BandwidthShaper
-- Version: 1.0
+- Version: 1.1
 - [App executable's icon source](https://vectorified.com/bandwidth-icon)
 - License: MIT License
 
