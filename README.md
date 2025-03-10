@@ -1,7 +1,4 @@
 # BandwidthShaper
-- Version: 1.1
-- [App executable's icon source](https://vectorified.com/bandwidth-icon)
-- License: MIT License
 
 ## Description
 This is a small, portable tool to limit bandwidth in Windows. Available for both 32-bit and 64-bit systems.
