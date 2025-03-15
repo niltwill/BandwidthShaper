@@ -31,38 +31,38 @@
 
 // Hash Map for Target PIDs
 typedef struct {
-	int pid;                // Process ID (key)
-	UT_hash_handle hh;      // Hash handle for uthash
+    int pid;                // Process ID (key)
+    UT_hash_handle hh;      // Hash handle for uthash
 } PIDEntry;
 
 // Parameters for connection rate
 typedef struct {
-	char ip[INET_ADDRSTRLEN];  // IP address as key
-	UINT port;
-	int packet_count;
-	DWORD last_reset;
-	UT_hash_handle hh;
+    char ip[INET_ADDRSTRLEN];  // IP address as key
+    UINT port;
+    int packet_count;
+    DWORD last_reset;
+    UT_hash_handle hh;
 } ConnectionRate;
 
 // Parameters for the NICs
 typedef struct {
-	unsigned int *nic_indices;
-	unsigned int nic_count;
-	double *download_limits; // Download rate per NIC (bytes per second)
-	double *upload_limits;   // Upload rate per NIC (bytes per second)
+    unsigned int *nic_indices;
+    unsigned int nic_count;
+    double *download_limits; // Download rate per NIC (bytes per second)
+    double *upload_limits;   // Upload rate per NIC (bytes per second)
 } ThrottlingParams;
 
 // The parameters for processes
 typedef struct {
-	PIDEntry *pid_map;
-	ConnectionRate *connection_rates;
-	CRITICAL_SECTION rate_limit_lock;
-	char *process_list;
-	unsigned int packet_threshold;
-	unsigned int time_threshold_ms;
-	unsigned int packet_count;
-	clock_t last_update_time;
-	bool needs_update;
+    PIDEntry *pid_map;
+    ConnectionRate *connection_rates;
+    CRITICAL_SECTION rate_limit_lock;
+    char *process_list;
+    unsigned int packet_threshold;
+    unsigned int time_threshold_ms;
+    unsigned int packet_count;
+    clock_t last_update_time;
+    bool needs_update;
 } ProcessParams;
 
 // Token Bucket Structure
@@ -70,7 +70,9 @@ typedef struct {
     double rate;            // Tokens added per second
     int max_tokens;         // Maximum tokens allowed
     volatile LONG tokens;   // Current number of tokens (atomic)
-    volatile LONGLONG last_checked;  // Last update time (high precision)
+    volatile double token_accumulator; // Stores fractional tokens to prevent truncation loss
+    volatile LONGLONG last_checked; // Last update time (high precision)
+    double freq;            // QueryPerformanceFrequency() value for time conversion
 } TokenBucket;
 
 // For Ctrl+C handler to quit
@@ -123,11 +125,11 @@ void print_rate_with_units(const char *label, double rate_bps) {
 	}
 }
 
-static double get_time_seconds() {
-    LARGE_INTEGER freq, counter;
-    QueryPerformanceFrequency(&freq);
+// Function to get current high-resolution time in ticks
+static inline LONGLONG get_time_ticks() {
+    LARGE_INTEGER counter;
     QueryPerformanceCounter(&counter);
-    return (double)counter.QuadPart / freq.QuadPart;
+    return counter.QuadPart;
 }
 
 // Function to initialize the token bucket
@@ -136,26 +138,40 @@ bool token_bucket_init(TokenBucket *bucket, double rate, int max_tokens) {
 
     bucket->rate = rate;
     bucket->max_tokens = max_tokens;
-    bucket->tokens = max_tokens;  // Start with full bucket
+    bucket->tokens = max_tokens;
+    bucket->token_accumulator = 0.0;
 
-    LONGLONG now = get_time_seconds();
-    bucket->last_checked = now;  // Atomic write not needed for simple assignment
+    LARGE_INTEGER freq;
+    QueryPerformanceFrequency(&freq);
+    bucket->freq = (double)freq.QuadPart;  // Store frequency for accurate time conversion
 
+    bucket->last_checked = get_time_ticks();  // Store initial timestamp
     return true;
 }
 
-// Function to update the token bucket (replenish tokens based on time)
+// Function to update the token bucket (replenish tokens based on elapsed time)
 void token_bucket_update(TokenBucket *bucket) {
-    double now = get_time_seconds();
-    double last = *(volatile double*)&bucket->last_checked;
-    double elapsed = now - last;
+    LONGLONG now = get_time_ticks();
+    LONGLONG last = InterlockedExchangeAdd64(&bucket->last_checked, 0); // Atomic read
+    LONGLONG elapsed_ticks = now - last;
 
-    if (elapsed > 0) {
-        int tokens_to_add = (int)(bucket->rate * elapsed);
-        int new_tokens = min(bucket->tokens + tokens_to_add, bucket->max_tokens);
-        
-        InterlockedExchange(&bucket->tokens, new_tokens);  // Atomic update
-        InterlockedExchange64(&bucket->last_checked, *(volatile LONGLONG*)&now); // Atomic update
+    if (elapsed_ticks > 0) {
+        double elapsed_seconds = (double)elapsed_ticks / bucket->freq;  // Convert ticks to seconds
+
+        // Accumulate fractional tokens
+        double tokens_to_add = bucket->rate * elapsed_seconds;
+        bucket->token_accumulator += tokens_to_add;
+
+        // Extract whole tokens and keep the fractional part
+        int whole_tokens = (int)bucket->token_accumulator;
+        bucket->token_accumulator -= whole_tokens;
+
+        // Update token count safely
+        int new_tokens = min(bucket->tokens + whole_tokens, bucket->max_tokens);
+        InterlockedExchange(&bucket->tokens, new_tokens);  // Atomic write
+
+        // Update last_checked timestamp
+        InterlockedExchange64(&bucket->last_checked, now);
     }
 }
 
@@ -164,15 +180,16 @@ bool token_bucket_has_enough_tokens(TokenBucket *bucket, int packet_size) {
     return bucket->tokens >= packet_size;
 }
 
-// Function to consume tokens from the bucket
+// Function to consume tokens from the bucket safely (atomic operation)
 bool token_bucket_consume(TokenBucket *bucket, int packet_size) {
-    token_bucket_update(bucket); // Ensure latest token count
+    token_bucket_update(bucket); // Ensure tokens are up to date
 
-    if (!token_bucket_has_enough_tokens(bucket, packet_size)) {
-        return false; // Not enough tokens
-    }
+    LONG old_tokens;
+    do {
+        old_tokens = bucket->tokens;
+        if (old_tokens < packet_size) return false;  // Not enough tokens
+    } while (InterlockedCompareExchange(&bucket->tokens, old_tokens - packet_size, old_tokens) != old_tokens);
 
-    InterlockedExchangeAdd(&bucket->tokens, -packet_size);  // Atomic subtraction
     return true;
 }
 
@@ -253,7 +270,7 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
     if (!nic_indices || !params->upload_limits || !params->download_limits) {
         fprintf(stderr, "Memory allocation failed for NIC parameters.\n");
         free(copy);
-        free(nic_indices);  // Free previously allocated memory
+        free(nic_indices);
         free(params->download_limits);
         free(params->upload_limits);
         exit(EXIT_FAILURE);
@@ -268,11 +285,8 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
             double *new_download_limits = realloc(params->download_limits, capacity * sizeof(double));
             double *new_upload_limits = realloc(params->upload_limits, capacity * sizeof(double));
 
-            // Check for realloc failures
             if (!new_indices || !new_download_limits || !new_upload_limits) {
                 fprintf(stderr, "Memory reallocation failed.\n");
-
-                // Free all previously allocated memory
                 free(copy);
                 free(nic_indices);
                 free(params->download_limits);
@@ -280,37 +294,41 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
                 exit(EXIT_FAILURE);
             }
 
-            // Assign only if realloc succeeded
             nic_indices = new_indices;
             params->download_limits = new_download_limits;
             params->upload_limits = new_upload_limits;
         }
 
-        // Parse "NIC_INDEX:DOWNLOAD:UPLOAD"
-        char *nic_part = strtok(token, ":");
+        // Copy token to avoid modifying the original with strtok
+        char *entry = strdup(token);
+        if (!entry) {
+            fprintf(stderr, "Memory allocation failed for NIC entry parsing.\n");
+            exit(EXIT_FAILURE);
+        }
+
+        // Split "NIC_INDEX:DOWNLOAD:UPLOAD"
+        char *nic_part = strtok(entry, ":");
         char *download_part = strtok(NULL, ":");
         char *upload_part = strtok(NULL, ":");
+
+        if (!nic_part) {
+            fprintf(stderr, "Invalid NIC format.\n");
+            free(entry);
+            continue;
+        }
 
         nic_indices[params->nic_count] = atoi(nic_part);
         params->download_limits[params->nic_count] = download_part ? parse_rate_with_units(download_part) : 0;
         params->upload_limits[params->nic_count] = upload_part ? parse_rate_with_units(upload_part) : 0;
 
         params->nic_count++;
+        free(entry);
+
         token = strtok(NULL, ",");
     }
 
     free(copy);
     return nic_indices;
-}
-
-// Function to check if a NIC index is in the target list
-bool is_nic_index_in_list(ThrottlingParams *params, unsigned int nic_index) {
-	for (int i = 0; i < params->nic_count; i++) {
-		if (params->nic_indices[i] == nic_index) {
-			return true;
-		}
-	}
-	return false;
 }
 
 // Function to find TCP PID
@@ -866,19 +884,19 @@ void print_help(const char *program_path) {
     const char *program_name = get_program_name(program_path);
     printf("Usage: %s [OPTIONS]\n", program_name);
     printf("Options:\n");
-	printf("  -P, --priority <NUM>                         Set WinDivert priority (default: 0, range: %d to %d)\n", WINDIVERT_PRIORITY_LOWEST, WINDIVERT_PRIORITY_HIGHEST);
-	printf("  -p, --process <process1,process2,...>        List of processes to monitor (comma-separated)\n");
-	printf("  -i, --process-update-interval <NUM>[p|t]     Packet count or time in ms needed for process updates (0 = no update)\n");
+    printf("  -P, --priority <NUM>                         Set WinDivert priority (default: 0, range: %d to %d)\n", WINDIVERT_PRIORITY_LOWEST, WINDIVERT_PRIORITY_HIGHEST);
+    printf("  -p, --process <process1,process2,...>        List of processes to monitor (comma-separated)\n");
+    printf("  -i, --process-update-interval <NUM>[p|t]     Packet count or time in ms needed for process updates (0 = no update)\n");
     printf("  -d, --download <RATE>[b|Kb|KB|Mb|MB|Gb|GB]   Download speed limit per second (default unit: KB)\n");
     printf("  -u, --upload <RATE>[b|Kb|KB|Mb|MB|Gb|GB]     Upload speed limit per second (default unit: KB)\n");
-	printf("  -D, --download-buffer <bytes>                Maximum download buffer size in bytes (default: 150000)\n");
-	printf("  -U, --upload-buffer <bytes>                  Maximum upload buffer size in bytes (default: 150000)\n");
-	printf("  -t, --tcp-limit <NUM>                        Maximum limit of active TCP connections (default: 0 = unlimited)\n");
-	printf("  -r, --udp-limit <NUM>                        Maximum limit of active UDP connections (default: 0 = unlimited)\n");
-	printf("  -L, --latency <ms>                           Set the latency in milliseconds (default: 0 = no latency)\n");
-	printf("  -m, --packet-loss <float>                    Set the packet loss in percentage (default: 0.00 = no loss)\n");
-	printf("  -n, --nic <interface_index>                  Throttle traffic for the specified network interfaces (comma-separated)\n");
-	printf("            <NIC_INDEX:DL_RATE:UL_RATE>        For different global download and upload rate limits per NIC\n");
+    printf("  -D, --download-buffer <bytes>                Maximum download buffer size in bytes (default: 150000)\n");
+    printf("  -U, --upload-buffer <bytes>                  Maximum upload buffer size in bytes (default: 150000)\n");
+    printf("  -t, --tcp-limit <NUM>                        Maximum limit of active TCP connections (default: 0 = unlimited)\n");
+    printf("  -r, --udp-limit <NUM>                        Maximum limit of active UDP connections (default: 0 = unlimited)\n");
+    printf("  -L, --latency <ms>                           Set the latency in milliseconds (default: 0 = no latency)\n");
+    printf("  -m, --packet-loss <float>                    Set the packet loss in percentage (default: 0.00 = no loss)\n");
+    printf("  -n, --nic <interface_index>                  Throttle traffic for the specified network interfaces (comma-separated)\n");
+    printf("            <NIC_INDEX:DL_RATE:UL_RATE>        For different global download and upload rate limits per NIC\n");
     printf("  -l, --list-nics                              List all available network interfaces\n");
     printf("  -h, --help                                   Display this help message and exit\n");
 }
@@ -894,15 +912,15 @@ int main(int argc, char *argv[]) {
 	}
 
     // Default values for command-line parameters
-	int priority = 0;
+    int priority = 0;
     double download_rate = 0;
     double upload_rate = 0;
-	unsigned int download_buffer_size = DEFAULT_DL_BUFFER;
-	unsigned int upload_buffer_size = DEFAULT_UL_BUFFER;
-	unsigned int max_tcp_connections = 0;  // unlimited
-	unsigned int max_udp_packets_per_second = 0;  // unlimited
-	unsigned int latency_ms = 0;  // no latency
-	float packet_loss = 0.00f;  // no packet loss
+    unsigned int download_buffer_size = DEFAULT_DL_BUFFER;
+    unsigned int upload_buffer_size = DEFAULT_UL_BUFFER;
+    unsigned int max_tcp_connections = 0;  // unlimited
+    unsigned int max_udp_packets_per_second = 0;  // unlimited
+    unsigned int latency_ms = 0;  // no latency
+    float packet_loss = 0.00f;  // no packet loss
 
 	// Initialize throttling parameters
 	ThrottlingParams params = {
@@ -1094,10 +1112,10 @@ int main(int argc, char *argv[]) {
 	}
 
     // Initialize mutex for rate limit with error handling
-    if (!InitializeCriticalSectionAndSpinCount(&processparams.rate_limit_lock, 4000)) {
-        fprintf(stderr, "Failed to initialize critical section.\n");
-        goto cleanup_final2;
-    }
+	if (!InitializeCriticalSectionAndSpinCount(&processparams.rate_limit_lock, 4000)) {
+		fprintf(stderr, "Failed to initialize critical section.\n");
+		goto cleanup_final2;
+	}
 
 	// Allocate token buckets for each NIC
 	TokenBucket *download_buckets = malloc(params.nic_count * sizeof(TokenBucket));
@@ -1117,22 +1135,33 @@ int main(int argc, char *argv[]) {
 		if (params.upload_limits[i] == 0) {
 			params.upload_limits[i] = upload_rate;
 		}
-		if (!token_bucket_init(&download_buckets[i], params.download_limits[i], download_buffer_size) ||
-		    !token_bucket_init(&upload_buckets[i], params.upload_limits[i], upload_buffer_size)) {
-				fprintf(stderr, "Failed to initialize token buckets.\n");
+
+		// Initialize download bucket only if download limit is nonzero
+		if (params.download_limits[i] > 0) {
+			if (!token_bucket_init(&download_buckets[i], params.download_limits[i], download_buffer_size)) {
+				fprintf(stderr, "Failed to initialize a download bucket.\n");
 				goto cleanup_final;
 			}
+		}
+
+		// Initialize upload bucket only if upload limit is nonzero
+		if (params.upload_limits[i] > 0) {
+			if (!token_bucket_init(&upload_buckets[i], params.upload_limits[i], upload_buffer_size)) {
+				fprintf(stderr, "Failed to initialize an upload bucket.\n");
+				goto cleanup_final;
+			}
+		}
 	}
 
 	// Set up WinDivert
-    HANDLE handle;
-    char packet[MAX_PACKET_SIZE];
-    UINT packet_len;
-    WINDIVERT_ADDRESS addr;
+	HANDLE handle;
+	char packet[MAX_PACKET_SIZE];
+	UINT packet_len;
+	WINDIVERT_ADDRESS addr;
 
-    // Open WinDivert handle for capturing traffic
-    handle = WinDivertOpen("ip or tcp or udp", WINDIVERT_LAYER_NETWORK, priority, 0);
-    if (handle == INVALID_HANDLE_VALUE) {
+	// Open WinDivert handle for capturing traffic
+	handle = WinDivertOpen("ip or tcp or udp", WINDIVERT_LAYER_NETWORK, priority, 0);
+	if (handle == INVALID_HANDLE_VALUE) {
 		DWORD error = GetLastError();
 		switch (error) {
 			case 2:	   fprintf(stderr, "Either one of the WinDivert32.sys or WinDivert64.sys files were not found.\n"); break;
@@ -1144,24 +1173,41 @@ int main(int argc, char *argv[]) {
 			case 1753: fprintf(stderr, "The Base Filtering Engine (BFE) service is not running! Start it for WinDivert to be able to run!\n"); break;
 			default:   fprintf(stderr, "Error opening WinDivert: %lu\n", error);
 		}
-        //fprintf(stderr, "Error opening WinDivert handle: %lu\n", GetLastError());
-        goto cleanup_final;
-    }
+		//fprintf(stderr, "Error opening WinDivert handle: %lu\n", GetLastError());
+		goto cleanup_final;
+	}
 
     // Main loop for processing packets
     while (TRUE) {		
-        // Read a packet from the network
+		// Read a packet from the network
 		if (!WinDivertRecv(handle, packet, sizeof(packet), &packet_len, &addr)) {
-            fprintf(stderr, "Failed to receive packet: %lu\n", GetLastError());
-            continue;
-        }
+			fprintf(stderr, "Failed to receive packet: %lu\n", GetLastError());
+			continue;
+		}
 
-        // Check for 'Q' key to quit the program
+		// Check for 'Q' key to quit the program
 		HWND hwnd = GetConsoleWindow(); // Get handle to the console window
-        if (GetForegroundWindow() == hwnd && (GetAsyncKeyState('Q') & 0x8000)) {
-            printf("Exiting bandwidth throttler...\n");
-            break;
-        }
+		if (GetForegroundWindow() == hwnd && (GetAsyncKeyState('Q') & 0x8000)) {
+			printf("Exiting bandwidth throttler...\n");
+			break;
+		}
+
+		// Get the NIC index
+		unsigned int if_idx = addr.Network.IfIdx;
+
+		// Find the matching NIC bucket index
+		int nic_index = -1;
+		for (int i = 0; i < params.nic_count; i++) {
+			if (params.nic_indices[i] == if_idx) {
+				nic_index = i;
+				break;
+			}
+		}
+
+		// If the NIC is not managed, skip processing
+		if (nic_index == -1) {
+			continue;
+		}
 
 		// Check if packet matches a monitored process
 		if (processparams.process_list != NULL) {
@@ -1169,10 +1215,8 @@ int main(int argc, char *argv[]) {
 			DWORD pid = get_packet_pid(&addr, packet, packet_len);
 			if (processparams.pid_map != NULL && !is_pid_in_map(processparams.pid_map, pid)) {
 				//printf("Debug: PID %ld is not monitored, continuing...\n", pid);
-				if (pid != 0) {
-					reinject_packet(handle, packet, packet_len, &addr);
-					continue;  // Skip further processing for unmonitored PIDs
-				}
+				reinject_packet(handle, packet, packet_len, &addr);
+				continue;
 			}
 		}
 
@@ -1216,23 +1260,6 @@ int main(int argc, char *argv[]) {
 			}
 		}
 
-		// Get the NIC index
-		unsigned int if_idx = addr.Network.IfIdx;
-
-		// Find the matching NIC bucket index
-		int nic_index = -1;
-		for (int i = 0; i < params.nic_count; i++) {
-			if (params.nic_indices[i] == if_idx) {
-				nic_index = i;
-				break;
-			}
-		}
-
-		// If the NIC is not managed, skip processing
-		if (nic_index == -1) {
-			continue;
-		}
-
 		// Select the correct token bucket
 		TokenBucket *bucket = NULL;
 		if (addr.Outbound) {
@@ -1242,7 +1269,6 @@ int main(int argc, char *argv[]) {
 		}
 
 		if (bucket != NULL) {
-			token_bucket_update(bucket);  // Refresh token count
 			if (!token_bucket_consume(bucket, packet_len)) {
 				// Not enough tokens, so drop the packet (rate limiting in action)
 				//printf("Packet dropped due to rate limiting: %u bytes\n", packet_len);
@@ -1266,11 +1292,11 @@ int main(int argc, char *argv[]) {
 			continue;
 		}
 
-		if (packet) reinject_packet(handle, packet, packet_len, &addr);
+		if(packet && packet_len > 0) reinject_packet(handle, packet, packet_len, &addr);
 
 		// If Ctrl+C was pressed, quit
 		if(quit_program) break;
-    }
+	}
 
 	goto cleanup_final;
 
