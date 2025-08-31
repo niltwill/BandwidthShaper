@@ -6,10 +6,6 @@ This is a small, portable tool to limit bandwidth in Windows. Available for both
 ### License and Compatibility Notice
 This application uses [WinDivert](https://reqrypt.org/windivert.html) to accomplish network traffic shaping. WinDivert is licensed under the GNU Lesser General Public License v3 (LGPL v3). You can find the full license text [here](https://github.com/basil00/WinDivert/blob/master/LICENSE).
 
-To comply with LGPL v3, you must separately [download WinDivert](https://github.com/basil00/WinDivert/releases) from its official source and manually copy the required DLL and SYS files to the appropriate directory:
-* For 64-bit (x64) applications: Copy `WinDivert.dll` and `WinDivert64.sys` from the **WinDivert x64 folder** to the application's x64 directory.
-* For 32-bit (x86) applications: Copy `WinDivert.dll`, `WinDivert32.sys`, and `WinDivert64.sys` from the **WinDivert x86 folder** to the application's x86 directory.
-
 WinDivert itself should support the most recent Windows operating systems, starting from Windows Vista and Windows Server 2008. It does not support older Windows versions like Windows XP. For that, you can use [Traffic Shaper XP](https://www.majorgeeks.com/files/details/traffic_shaper_xp.html) instead.
 
 ## Options
@@ -32,6 +28,7 @@ Options:
   -n, --nic <interface_index>                  Throttle traffic for the specified network interfaces (comma-separated)
             <NIC_INDEX:DL_RATE:UL_RATE>        For different global download and upload rate limits per NIC
   -l, --list-nics                              List all available network interfaces
+  -s, --statistics                             Enable statistics output (default: disabled)
   -h, --help                                   Display this help message and exit
 ```
 
@@ -58,6 +55,8 @@ If you want to limit the throttling itself to only apply to certain processes, p
 If you want these processes to get their PIDs updated, use `-i` (short for interval) with a whole number and a `p` or `t` attached to it. If you did not specify any processes with the `-p` parameter, this is not going to do anything. The default is `-i 0`, which means that the process list will remain as is for the time being. You can either use a packet count or time in ms. A good starting point is `-i 1000p`, or use a higher packet count, like `-i 2000p` or `-i 5000p` if that gets updated too frequently. Alternatively, use a periodic time in ms, e.g. `-i 5000t` for 5 seconds (60000 milliseconds is 1 minute). The reason why this exists is because certain apps may spawn new processes and/or close some of their own. Another reason is if you want to keep monitoring certain processes, since if you close the apps, the traffic shaping will lose effect once you reopen them. If that is not expected to happen (and processes are going to stay as they are), it's best to not specify this option, or you can still explicitly use `-i 0` (which is the default).
 
 Specify the `-d` and `-u` options as you need, for the download and upload speed limit. At least one of the two should be specified. You can use different units for the download and upload rates, as you prefer. If the default KB is not what you need (if you do not specify the unit, it will default to KB), you can also specify it in bytes (b), kilobits (Kb), megabytes (MB), megabits (Mb), gigabytes (GB), gigabits (Gb). Use the number and then their prefix, e.g. 1MB for 1 megabyte or 500KB for 500 kilobytes. Make sure to use the letters as you see in the help output, as using lowercase letters or trying to abbreviate them (e.g. "k", "m", "g", "kb", "mb" or "gb") will not work, as that won't be parsed.
+
+To see the statistics during usage, use the `-s` or `--statistics` flag.
 
 ---
 
@@ -87,7 +86,7 @@ Because this uses the WinDivert driver on demand, the application must have admi
 If you do not always want to open an elevated command prompt and manually execute the app with its flags, then it's best to set your preferred parameters in the `params.txt` file and use `run-BandwidthShaper.exe` or `run-BandwidthShaper-Hidden.exe` (you can rename these executable files). Remember: make sure to change the NIC's index number to be valid, yours will most likely need to be different from mine!
 
 ## Issues
-- **I want to use this for ARM64:** This needs a WinDivert driver for ARM64, but there is no official compiled and signed version. You will either have to compile the driver yourself, or [use what was compiled by sj6219](https://github.com/sj6219/Divert/releases/tag/ARM64). Download that and copy only the `WinDivert.dll` and `WinDivert64.sys` files to the application's *arm64* folder. Because that driver has no certificate, you have to run Windows in testsign mode with the command (as admin): `Bcdedit.exe -set TESTSIGNING ON` - then restart your computer.
+- **I want to use this for ARM64:** This needs a WinDivert driver for ARM64, but there is no official compiled and signed version. You will either have to compile the driver yourself, or [use what was compiled by sj6219](https://github.com/sj6219/Divert/releases/tag/ARM64). This is what's being bundled in the *arm64* folder. Because that driver has no certificate, you have to run Windows in testsign mode with the command (as admin): `Bcdedit.exe -set TESTSIGNING ON` - then restart your computer.
 
 - **Invalid digital signature error message for the "WinDivert64.sys" or "WinDivert32.sys" file:** This may happen when running on an unsupported Windows operating system, such as Windows 7. In this case the driver can only be loaded if you disable "driver signature enforcement" in Windows. To do this, with Windows 7, you can restart the computer and keep pressing F8 until the advanced boot options menu gets displayed. Then choose "Disable driver signature enforcement". Obviously this is not recommended or a safe practice, but it's the only way to get it working on an unsupported OS. Due to security, Windows will not load the needed driver and thus no traffic shaping can take place. For a more permanent solution, you can test [sign the driver](https://reqrypt.org/windivert-faq.html#q3) yourself. [Click here](https://www.richud.com/wiki/Windows_7_Install_Unsigned_Drivers_CAT_fix) for another example.
 

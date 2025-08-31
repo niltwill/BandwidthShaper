@@ -1,9 +1,11 @@
 // Define statements
 #define WIN32_LEAN_AND_MEAN
 #define MAX_INTERVAL_STR_LEN 32
-#define MAX_PACKET_SIZE 65575     // Maximum packet size (65535 + 40)
-#define DEFAULT_DL_BUFFER 150000  // Default download buffer size in bytes
-#define DEFAULT_UL_BUFFER 150000  // Default upload buffer size in bytes
+#define MAX_PACKET_SIZE 65575      // Maximum packet size (65535 + 40)
+#define DEFAULT_DL_BUFFER 150000   // Default download buffer size in bytes
+#define DEFAULT_UL_BUFFER 150000   // Default upload buffer size in bytes
+#define DELAY_BUFFER_SIZE 8192     // Circular buffer size for delayed packets
+#define STATS_UPDATE_INTERVAL 5000 // Update stats every 5 seconds
 
 // Standard library headers
 #include <stdio.h>
@@ -28,6 +30,9 @@
 // Linker directives
 #pragma comment(lib, "User32.lib") // GetAsyncKeyState
 #pragma comment(lib, "iphlpapi.lib")
+
+// Single global lock
+CRITICAL_SECTION g_global_lock;
 
 // Hash Map for Target PIDs
 typedef struct {
@@ -56,7 +61,6 @@ typedef struct {
 typedef struct {
     PIDEntry *pid_map;
     ConnectionRate *connection_rates;
-    CRITICAL_SECTION rate_limit_lock;
     char *process_list;
     unsigned int packet_threshold;
     unsigned int time_threshold_ms;
@@ -70,13 +74,47 @@ typedef struct {
     double rate;            // Tokens added per second
     int max_tokens;         // Maximum tokens allowed
     volatile LONG tokens;   // Current number of tokens (atomic)
-    volatile double token_accumulator; // Stores fractional tokens to prevent truncation loss
+    double token_accumulator; // Stores fractional tokens to prevent truncation loss
     volatile LONGLONG last_checked; // Last update time (high precision)
     double freq;            // QueryPerformanceFrequency() value for time conversion
 } TokenBucket;
 
-// For Ctrl+C handler to quit
-bool quit_program = false;
+// Delayed packet structure for circular buffer
+typedef struct {
+    char packet[MAX_PACKET_SIZE];
+    UINT packet_len;
+    WINDIVERT_ADDRESS addr;
+    LONGLONG timestamp;  // When to reinject
+    bool in_use;
+} DelayedPacket;
+
+// Circular buffer for delayed packets
+typedef struct {
+    DelayedPacket *packets;
+    int head;
+    int tail;
+    int count;
+    int capacity;
+} DelayBuffer;
+
+// Statistics structure
+typedef struct {
+    volatile LONG packets_processed;
+    volatile LONG packets_dropped_rate_limit;
+    volatile LONG packets_dropped_loss;
+    volatile LONG packets_delayed;
+    volatile LONG bytes_processed;
+    volatile LONG invalid_packets;
+    LONGLONG last_stats_update;
+} PacketStats;
+
+// Global variables
+PacketStats g_stats = {0};
+DelayBuffer g_delay_buffer = {0};
+double g_perf_frequency = 0.0;
+volatile bool quit_program = false; // For Ctrl+C handler to quit
+bool enable_statistics = false;
+
 
 // Function to parse a rate string with units
 double parse_rate_with_units(const char *rate_str) {
@@ -108,7 +146,7 @@ double parse_rate_with_units(const char *rate_str) {
 		}
 	} else {
 		fprintf(stderr, "Failed to parse rate '%s'. Defaulting to 0.\n", rate_str);
-		return 0;
+		return value;
 	}
 }
 
@@ -143,9 +181,9 @@ bool token_bucket_init(TokenBucket *bucket, double rate, int max_tokens) {
 
     LARGE_INTEGER freq;
     QueryPerformanceFrequency(&freq);
-    bucket->freq = (double)freq.QuadPart;  // Store frequency for accurate time conversion
-
-    bucket->last_checked = get_time_ticks();  // Store initial timestamp
+    bucket->freq = (double)freq.QuadPart;
+    bucket->last_checked = get_time_ticks();
+    
     return true;
 }
 
@@ -157,14 +195,16 @@ void token_bucket_update(TokenBucket *bucket) {
 
     if (elapsed_ticks > 0) {
         double elapsed_seconds = (double)elapsed_ticks / bucket->freq;  // Convert ticks to seconds
+        double tokens_to_add = bucket->rate * elapsed_seconds;
 
         // Accumulate fractional tokens
-        double tokens_to_add = bucket->rate * elapsed_seconds;
+		EnterCriticalSection(&g_global_lock);
         bucket->token_accumulator += tokens_to_add;
 
         // Extract whole tokens and keep the fractional part
         int whole_tokens = (int)bucket->token_accumulator;
         bucket->token_accumulator -= whole_tokens;
+		LeaveCriticalSection(&g_global_lock);
 
         // Update token count safely
         int new_tokens = min(bucket->tokens + whole_tokens, bucket->max_tokens);
@@ -206,6 +246,7 @@ bool should_drop_packet(HANDLE handle, char *packet, unsigned int packet_len, WI
 		float rand_value = (float)rand() / (float)RAND_MAX;  // Generate a random float between 0.0 and 1.0
 		if (rand_value < (packet_loss / 100.0f)) {
 			//printf("Dropped packet to simulate loss (%.2f%%)\n", packet_loss);
+			InterlockedIncrement(&g_stats.packets_dropped_loss);
 			return true;  // Drop the packet
 		}
 	}
@@ -239,31 +280,145 @@ void list_network_interfaces() {
         return;
     }
 
+    printf("Available Network Interfaces:\n");
+    printf("============================\n");
+
     // Iterate through the adapters and display information
     PIP_ADAPTER_ADDRESSES adapter = adapter_addresses;
     while (adapter) {
-        printf("Interface Index: %u\n", adapter->IfIndex);  // Display the interface index
-        printf("Interface Name: %s\n", adapter->AdapterName);  // Display the interface name
-        printf("Adapter Description: %ws\n", adapter->Description);  // Description of the adapter
+        const char *status_str = "Unknown";
+        switch (adapter->OperStatus) {
+            case IfOperStatusUp: status_str = "Up (Operational)"; break;
+            case IfOperStatusDown: status_str = "Down"; break;
+            case IfOperStatusTesting: status_str = "Testing"; break;
+            case IfOperStatusUnknown: status_str = "Unknown"; break;
+            case IfOperStatusDormant: status_str = "Dormant"; break;
+            case IfOperStatusNotPresent: status_str = "Not Present"; break;
+            case IfOperStatusLowerLayerDown: status_str = "Lower Layer Down"; break;
+        }
 
-        adapter = adapter->Next;
+        printf("Interface Index: %u\n", adapter->IfIndex);
+        printf("Interface Name: %s\n", adapter->AdapterName);
+        printf("Description: %ws\n", adapter->Description);
+        printf("Status: %s\n", status_str);
+        
+        // Only show "Available for throttling" for operational interfaces
+        if (adapter->OperStatus == IfOperStatusUp) {
+            printf(">> Available for throttling <<\n");
+        }
+        
         printf("\n");
+        adapter = adapter->Next;
     }
 
     free(adapter_addresses);
 }
 
+// Function to get all valid NIC indices on the system
+bool get_valid_nic_indices(unsigned int **valid_indices, unsigned int *count) {
+    PIP_ADAPTER_ADDRESSES adapter_addresses = NULL;
+    ULONG out_buf_len = 0;
+    DWORD dwRetVal = 0;
+
+    // Get the necessary size for the buffer
+    dwRetVal = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, adapter_addresses, &out_buf_len);
+    if (dwRetVal == ERROR_BUFFER_OVERFLOW) {
+        adapter_addresses = (PIP_ADAPTER_ADDRESSES)malloc(out_buf_len);
+        if (adapter_addresses == NULL) {
+            fprintf(stderr, "Memory allocation failed for adapter addresses\n");
+            return false;
+        }
+    } else if (dwRetVal != NO_ERROR) {
+        fprintf(stderr, "GetAdaptersAddresses failed with error %lu\n", dwRetVal);
+        return false;
+    }
+
+    // Retrieve the list of network adapters
+    dwRetVal = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, adapter_addresses, &out_buf_len);
+    if (dwRetVal != NO_ERROR) {
+        fprintf(stderr, "GetAdaptersAddresses failed with error %lu\n", dwRetVal);
+        free(adapter_addresses);
+        return false;
+    }
+
+    // Count valid adapters first
+    *count = 0;
+    PIP_ADAPTER_ADDRESSES adapter = adapter_addresses;
+    while (adapter) {
+        // Only count operational interfaces
+        if (adapter->OperStatus == IfOperStatusUp) {
+            (*count)++;
+        }
+        adapter = adapter->Next;
+    }
+
+    if (*count == 0) {
+        fprintf(stderr, "No operational network interfaces found\n");
+        free(adapter_addresses);
+        return false;
+    }
+
+    // Allocate array for valid indices
+    *valid_indices = malloc(*count * sizeof(unsigned int));
+    if (!*valid_indices) {
+        fprintf(stderr, "Memory allocation failed for valid indices\n");
+        free(adapter_addresses);
+        return false;
+    }
+
+    // Fill the array with valid indices
+    unsigned int index = 0;
+    adapter = adapter_addresses;
+    while (adapter && index < *count) {
+        if (adapter->OperStatus == IfOperStatusUp) {
+            (*valid_indices)[index] = adapter->IfIndex;
+            index++;
+        }
+        adapter = adapter->Next;
+    }
+
+    free(adapter_addresses);
+    return true;
+}
+
+// Function to check if a NIC index is valid
+bool is_valid_nic_index(unsigned int nic_index, unsigned int *valid_indices, unsigned int valid_count) {
+    for (unsigned int i = 0; i < valid_count; i++) {
+        if (valid_indices[i] == nic_index) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Helper function to parse comma-separated NIC indices
 unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
+    // Get valid NIC indices from system
+    unsigned int *valid_indices = NULL;
+    unsigned int valid_count = 0;
+
+    if (!get_valid_nic_indices(&valid_indices, &valid_count)) {
+        fprintf(stderr, "Failed to get valid network interface indices\n");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Valid network interface indices: ");
+    for (unsigned int i = 0; i < valid_count; i++) {
+        if (i > 0) printf(", ");
+        printf("%u", valid_indices[i]);
+    }
+    printf("\n\n");
+
     char *copy = strdup(input);
     if (!copy) {
         fprintf(stderr, "Memory allocation failed for NIC parsing.\n");
+        free(valid_indices);
         exit(EXIT_FAILURE);
     }
 
     char *token = strtok(copy, ",");
     int capacity = 16;
-    int *nic_indices = malloc(capacity * sizeof(int));
+    unsigned int *nic_indices = malloc(capacity * sizeof(unsigned int));
     params->download_limits = malloc(capacity * sizeof(double));
     params->upload_limits = malloc(capacity * sizeof(double));
 
@@ -273,6 +428,7 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
         free(nic_indices);
         free(params->download_limits);
         free(params->upload_limits);
+        free(valid_indices);
         exit(EXIT_FAILURE);
     }
 
@@ -281,7 +437,7 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
     while (token) {
         if (params->nic_count >= capacity) {
             capacity *= 2;
-            int *new_indices = realloc(nic_indices, capacity * sizeof(int));
+            unsigned int *new_indices = realloc(nic_indices, capacity * sizeof(unsigned int));
             double *new_download_limits = realloc(params->download_limits, capacity * sizeof(double));
             double *new_upload_limits = realloc(params->upload_limits, capacity * sizeof(double));
 
@@ -291,6 +447,7 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
                 free(nic_indices);
                 free(params->download_limits);
                 free(params->upload_limits);
+                free(valid_indices);
                 exit(EXIT_FAILURE);
             }
 
@@ -299,14 +456,17 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
             params->upload_limits = new_upload_limits;
         }
 
-        // Copy token to avoid modifying the original with strtok
         char *entry = strdup(token);
         if (!entry) {
             fprintf(stderr, "Memory allocation failed for NIC entry parsing.\n");
+            free(copy);
+            free(nic_indices);
+            free(params->download_limits);
+            free(params->upload_limits);
+            free(valid_indices);
             exit(EXIT_FAILURE);
         }
 
-        // Split "NIC_INDEX:DOWNLOAD:UPLOAD"
         char *nic_part = strtok(entry, ":");
         char *download_part = strtok(NULL, ":");
         char *upload_part = strtok(NULL, ":");
@@ -317,7 +477,22 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
             continue;
         }
 
-        nic_indices[params->nic_count] = atoi(nic_part);
+        unsigned int nic_index = (unsigned int)atoi(nic_part);
+
+        // Validate NIC index
+        if (!is_valid_nic_index(nic_index, valid_indices, valid_count)) {
+            fprintf(stderr, "Error: Network interface index %u is not valid or not operational.\n", nic_index);
+            fprintf(stderr, "Use --list-nics to see available interfaces.\n");
+            free(entry);
+            free(copy);
+            free(nic_indices);
+            free(params->download_limits);
+            free(params->upload_limits);
+            free(valid_indices);
+            exit(EXIT_FAILURE);
+        }
+
+        nic_indices[params->nic_count] = nic_index;
         params->download_limits[params->nic_count] = download_part ? parse_rate_with_units(download_part) : 0;
         params->upload_limits[params->nic_count] = upload_part ? parse_rate_with_units(upload_part) : 0;
 
@@ -328,6 +503,7 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
     }
 
     free(copy);
+    free(valid_indices);
     return nic_indices;
 }
 
@@ -493,13 +669,13 @@ bool check_packet_rate_limit(ProcessParams *processparams, const char *ip, UINT 
     DWORD current_time = GetTickCount64();
     ConnectionRate *rate_entry = NULL;
 
-    EnterCriticalSection(&processparams->rate_limit_lock);
+    EnterCriticalSection(&g_global_lock);
 
     HASH_FIND_STR(processparams->connection_rates, ip, rate_entry);
     if (!rate_entry) {
         rate_entry = malloc(sizeof(ConnectionRate));
         if (!rate_entry) {
-            LeaveCriticalSection(&processparams->rate_limit_lock);
+            LeaveCriticalSection(&g_global_lock);
             return false;  // Memory allocation failed
         }
         strncpy(rate_entry->ip, ip, INET_ADDRSTRLEN);
@@ -516,22 +692,215 @@ bool check_packet_rate_limit(ProcessParams *processparams, const char *ip, UINT 
         }
 
         if (rate_entry->packet_count > max_packets) {
-            LeaveCriticalSection(&processparams->rate_limit_lock);
+            LeaveCriticalSection(&g_global_lock);
             return false;  // Drop packet
         }
     }
 
-    LeaveCriticalSection(&processparams->rate_limit_lock);
+    LeaveCriticalSection(&g_global_lock);
     return true;
 }
+
+// Initialize delay buffer
+bool delay_buffer_init(DelayBuffer *buffer, int capacity) {
+    buffer->packets = calloc(capacity, sizeof(DelayedPacket));
+    if (!buffer->packets) {
+        return false;
+    }
+
+    buffer->head = 0;
+    buffer->tail = 0;
+    buffer->count = 0;
+    buffer->capacity = capacity;
+
+    return true;
+}
+
+void delay_buffer_cleanup(DelayBuffer *buffer) {
+    if (buffer) {
+        free(buffer->packets);
+        memset(buffer, 0, sizeof(DelayBuffer));
+    }
+}
+
+// Add packet to delay buffer
+bool delay_buffer_add(DelayBuffer *buffer, const char *packet, UINT packet_len, 
+                     const WINDIVERT_ADDRESS *addr, LONGLONG delay_ticks) {
+    LARGE_INTEGER counter;
+    QueryPerformanceCounter(&counter);
+    LONGLONG target_time = counter.QuadPart + delay_ticks;
+
+    EnterCriticalSection(&g_global_lock);
+
+    if (buffer->count >= buffer->capacity) {
+        LeaveCriticalSection(&g_global_lock);
+        return false; // Buffer full
+    }
+
+    DelayedPacket *delayed = &buffer->packets[buffer->tail];
+    memcpy(delayed->packet, packet, packet_len);
+    delayed->packet_len = packet_len;
+    delayed->addr = *addr;
+    delayed->timestamp = target_time;
+    delayed->in_use = true;
+
+    buffer->tail = (buffer->tail + 1) % buffer->capacity;
+    buffer->count++;
+
+    LeaveCriticalSection(&g_global_lock);
+
+    InterlockedIncrement(&g_stats.packets_delayed);
+    return true;
+}
+
+// Process delayed packets
+void delay_buffer_process(DelayBuffer *buffer, HANDLE handle) {
+    LARGE_INTEGER counter;
+    QueryPerformanceCounter(&counter);
+    LONGLONG current_time = counter.QuadPart;
+
+    EnterCriticalSection(&g_global_lock);
+
+    while (buffer->count > 0) {
+        DelayedPacket *delayed = &buffer->packets[buffer->head];
+
+        if (!delayed->in_use || delayed->timestamp > current_time) {
+            break;
+        }
+
+        // Copy packet data before releasing lock
+        char temp_packet[MAX_PACKET_SIZE];
+        UINT temp_len = delayed->packet_len;
+        WINDIVERT_ADDRESS temp_addr = delayed->addr;
+        memcpy(temp_packet, delayed->packet, temp_len);
+
+        delayed->in_use = false;
+        buffer->head = (buffer->head + 1) % buffer->capacity;
+        buffer->count--;
+
+        LeaveCriticalSection(&g_global_lock);
+
+        // Send packet outside of lock
+        if (!WinDivertSend(handle, temp_packet, temp_len, NULL, &temp_addr)) {
+            // Log error but continue
+        }
+
+        EnterCriticalSection(&g_global_lock); // Re-enter for next iteration
+    }
+
+    LeaveCriticalSection(&g_global_lock);
+}
+
+// Validate packet structure and content
+bool validate_packet(const char *packet, UINT packet_len) {
+    if (!packet || packet_len == 0 || packet_len > MAX_PACKET_SIZE) {
+        InterlockedIncrement(&g_stats.invalid_packets);
+        return false;
+    }
+
+    PWINDIVERT_IPHDR ipHdr = NULL;
+    PWINDIVERT_IPV6HDR ipv6Hdr = NULL;
+    PWINDIVERT_TCPHDR tcpHdr = NULL;
+    PWINDIVERT_UDPHDR udpHdr = NULL;
+    BYTE protocol = 0;
+
+    // Use WinDivert to parse and validate packet structure
+    if (!WinDivertHelperParsePacket((PVOID)packet, packet_len, &ipHdr, &ipv6Hdr, 
+                                   &protocol, NULL, NULL, &tcpHdr, &udpHdr, NULL, NULL, NULL, NULL)) {
+        InterlockedIncrement(&g_stats.invalid_packets);
+        return false;
+    }
+
+    // Validate IPv4 header
+    if (ipHdr) {
+        if (ipHdr->Version != 4) {
+            InterlockedIncrement(&g_stats.invalid_packets);
+            return false;
+        }
+        
+        UINT16 total_length = ntohs(ipHdr->Length);
+        if (total_length > packet_len || total_length < (ipHdr->HdrLength * 4)) {
+            InterlockedIncrement(&g_stats.invalid_packets);
+            return false;
+        }
+        
+        // Basic header length validation
+        if (ipHdr->HdrLength < 5 || ipHdr->HdrLength > 15) {
+            InterlockedIncrement(&g_stats.invalid_packets);
+            return false;
+        }
+    }
+    
+    // Validate IPv6 header
+    if (ipv6Hdr) {
+        if ((ipv6Hdr->Version) != 6) {
+            InterlockedIncrement(&g_stats.invalid_packets);
+            return false;
+        }
+        
+        UINT16 payload_length = ntohs(ipv6Hdr->Length);
+        if (payload_length + 40 > packet_len) { // 40 is IPv6 header size
+            InterlockedIncrement(&g_stats.invalid_packets);
+            return false;
+        }
+    }
+    
+    // Validate TCP header
+    if (tcpHdr && (protocol == IPPROTO_TCP)) {
+        if (tcpHdr->HdrLength < 5 || tcpHdr->HdrLength > 15) {
+            InterlockedIncrement(&g_stats.invalid_packets);
+            return false;
+        }
+        
+        // Validate port numbers (0 is invalid for TCP)
+        if (tcpHdr->SrcPort == 0 || tcpHdr->DstPort == 0) {
+            InterlockedIncrement(&g_stats.invalid_packets);
+            return false;
+        }
+    }
+    
+    // Validate UDP header
+    if (udpHdr && (protocol == IPPROTO_UDP)) {
+        UINT16 udp_length = ntohs(udpHdr->Length);
+        if (udp_length < 8) { // Minimum UDP header size
+            InterlockedIncrement(&g_stats.invalid_packets);
+            return false;
+        }
+        
+        // Check if UDP length makes sense within the packet
+        UINT16 ip_header_size = ipHdr ? (ipHdr->HdrLength * 4) : (ipv6Hdr ? 40 : 0);
+        if (ip_header_size + udp_length > packet_len) {
+            InterlockedIncrement(&g_stats.invalid_packets);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 
 // Cleanup function to free all memory associated with rate limits
 void cleanup_rate_limits(ProcessParams *processparams) {
     ConnectionRate *current_rate, *tmp;
+    DWORD current_time = GetTickCount64();
+    int cleaned = 0;
+
+    EnterCriticalSection(&g_global_lock);
 
     HASH_ITER(hh, processparams->connection_rates, current_rate, tmp) {
-        HASH_DEL(processparams->connection_rates, current_rate);  // Remove from hash table
-        free(current_rate);  // Free the allocated memory
+        // Clean up entries older than 30 seconds
+        if (current_time - current_rate->last_reset > 30000) {
+            HASH_DEL(processparams->connection_rates, current_rate);
+            free(current_rate);
+            cleaned++;
+        }
+    }
+
+    LeaveCriticalSection(&g_global_lock);
+
+    // Optional: log cleanup activity
+    if (cleaned > 0) {
+        printf("Cleaned up %d stale connection entries\n", cleaned);
     }
 }
 
@@ -632,27 +1001,43 @@ char **parse_processes(char *input, int *count) {
     *count = 0;
 
     char *token;
-    char *context = NULL;  // Required for strtok_s
+    char *context = NULL;
     token = strtok_s(input, ",", &context);
+    
     while (token != NULL) {
         if (*count >= capacity) {
             capacity *= 2;
             char **new_processes = realloc(processes, capacity * sizeof(char *));
             if (new_processes == NULL) {
                 fprintf(stderr, "Memory allocation failed during resizing!\n");
-                free(processes);  // Free the original memory if realloc fails
+                // Free all previously allocated strings
+                for (int i = 0; i < *count; i++) {
+                    free(processes[i]);
+                }
+                free(processes);
                 exit(EXIT_FAILURE);
             }
-            processes = new_processes;  // Assign only if realloc succeeded
+            processes = new_processes;
         }
 
         // Trim leading spaces
         while (*token == ' ') token++;
+        
+        // Trim trailing spaces
+        char *end = token + strlen(token) - 1;
+        while (end > token && *end == ' ') {
+            *end = '\0';
+            end--;
+        }
 
         processes[*count] = strdup(token);
         if (processes[*count] == NULL) {
             fprintf(stderr, "Memory allocation failed for process name!\n");
-            free(processes);  // Free previously allocated memory
+            // Free all previously allocated strings
+            for (int i = 0; i < *count; i++) {
+                free(processes[i]);
+            }
+            free(processes);
             exit(EXIT_FAILURE);
         }
         (*count)++;
@@ -662,11 +1047,10 @@ char **parse_processes(char *input, int *count) {
     return processes;
 }
 
-
 // Function to parse the process update interval (packets or time)
 int parse_process_update_interval(const char *input, ProcessParams *processparams) {
 	size_t len = strlen(input);
-	
+
 	// Handle the special case where input is "0"
 	if (strcmp(input, "0") == 0) {
 		processparams->packet_threshold = 0;  // Disable packet-based updates
@@ -676,7 +1060,7 @@ int parse_process_update_interval(const char *input, ProcessParams *processparam
 
 	if (len < 2 || len >= MAX_INTERVAL_STR_LEN) {
 		fprintf(stderr, "Error: Invalid format for --process-update-interval. Use '<value>p', '<value>t', or '0'.\n");
-		return -1;
+		return 1;
 	}
 
 	char value_str[MAX_INTERVAL_STR_LEN];
@@ -685,7 +1069,7 @@ int parse_process_update_interval(const char *input, ProcessParams *processparam
 
 	if (!isdigit(value_str[0])) {
 		fprintf(stderr, "Error: Invalid numeric value for --process-update-interval.\n");
-		return -1;
+		return 1;
 	}
 
 	unsigned int value = atoi(value_str);
@@ -699,13 +1083,14 @@ int parse_process_update_interval(const char *input, ProcessParams *processparam
 		processparams->packet_threshold = 0; // Disable packet-based updates
 	} else {
 		fprintf(stderr, "Error: Unknown unit '%c' for --process-update-interval. Use 'p' for packets, 't' for time, or '0'.\n", unit);
-		return -1;
+		return 1;
 	}
 
 	return 0; // Success
 }
 
 // Function to get the name of the process from its PID
+/*
 int get_process_name_from_pid(DWORD pid, char *process_name, size_t name_size) {
 	HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
 	if (!hProcess) {
@@ -724,6 +1109,7 @@ int get_process_name_from_pid(DWORD pid, char *process_name, size_t name_size) {
 	CloseHandle(hProcess);
 	return 1;
 }
+*/
 
 // Function to check if a PID exists
 bool is_process_alive(int pid) {
@@ -745,27 +1131,43 @@ void update_pid_map(ProcessParams *processparams) {
 
 	clock_t current_time = clock();
 	double elapsed_time_ms = ((double)(current_time - processparams->last_update_time) / CLOCKS_PER_SEC) * 1000.0;
+	
+    // Enforce minimum 5-second interval regardless of packet count
+    bool time_based_update = (processparams->time_threshold_ms > 0 && elapsed_time_ms >= processparams->time_threshold_ms);
+    bool packet_based_update = (processparams->packet_threshold > 0 && ++processparams->packet_count >= processparams->packet_threshold);
+	
+    // Add minimum 5-second cooldown
+    static clock_t last_actual_update = 0;
+    double since_last_update = ((double)(current_time - last_actual_update) / CLOCKS_PER_SEC) * 1000.0;
 
-	if ((processparams->packet_threshold > 0 && ++processparams->packet_count >= processparams->packet_threshold) ||
-		(processparams->time_threshold_ms > 0 && elapsed_time_ms >= processparams->time_threshold_ms)) {
-
-		processparams->packet_count = 0;
-		processparams->last_update_time = clock();
-		processparams->needs_update = true;
-	}
+    if ((time_based_update || packet_based_update) && since_last_update >= 5000) {
+        last_actual_update = current_time;
+        processparams->packet_count = 0;
+        processparams->last_update_time = current_time;
+        processparams->needs_update = true;
+    }
 
 	if (!processparams->needs_update) return;
 	processparams->needs_update = false;
 
 	// Remove stale PIDs (only dead ones)
+    PIDEntry **to_remove = malloc(HASH_COUNT(processparams->pid_map) * sizeof(PIDEntry*));
+    int remove_count = 0;
+
     PIDEntry *entry, *tmp;
-    UT_hash_handle *hh;
     HASH_ITER(hh, processparams->pid_map, entry, tmp) {
         if (!is_process_alive(entry->pid)) {
-			printf("Stale PID %u was removed.\n", entry->pid);
-            HASH_DEL(processparams->pid_map, entry);
-            free(entry);
+            if (remove_count < 1024) {
+                to_remove[remove_count++] = entry;
+            }
         }
+    }
+
+    // Remove dead PIDs
+    for (int i = 0; i < remove_count; i++) {
+        printf("Stale PID %u was removed.\n", to_remove[i]->pid);
+        HASH_DEL(processparams->pid_map, to_remove[i]);
+        free(to_remove[i]);
     }
 
 	// Add new PIDs
@@ -803,80 +1205,155 @@ void update_pid_map(ProcessParams *processparams) {
 		if (pid_list) free(pid_list);
 		free(processes[i]);
 	}
+	free(to_remove);
 	free(processes);
 }
 
 // Stops the WinDivert service
 void stop_windivert() {
-	SC_HANDLE hSCManager;
-	SC_HANDLE hService;
-	SERVICE_STATUS_PROCESS status;
-	DWORD bytesNeeded;
+    SC_HANDLE hSCManager = NULL;
+    SC_HANDLE hService = NULL;
+    SERVICE_STATUS_PROCESS status;
+    DWORD bytesNeeded;
 
-	// Open the service control manager
-	hSCManager = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
-	if (hSCManager == NULL) {
-		fprintf(stderr, "OpenSCManager failed (%d)\n", GetLastError());
-	}
+    hSCManager = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
+    if (hSCManager == NULL) {
+        fprintf(stderr, "OpenSCManager failed (%lu)\n", GetLastError());
+        return; // FIXED: Return instead of falling through
+    }
 
-	// Open the service
-	hService = OpenService(hSCManager, "WinDivert", SERVICE_QUERY_STATUS | SERVICE_STOP);
-	if (hService == NULL) {
-		fprintf(stderr, "OpenService failed (%d)\n", GetLastError());
-		CloseServiceHandle(hSCManager);
-	}
+    hService = OpenService(hSCManager, TEXT("WinDivert"), SERVICE_QUERY_STATUS | SERVICE_STOP);
+    if (hService == NULL) {
+        fprintf(stderr, "OpenService failed (%lu)\n", GetLastError());
+        CloseServiceHandle(hSCManager);
+        return;
+    }
 
-	// Query the service status
-	if (QueryServiceStatusEx(hService, SC_STATUS_PROCESS_INFO, (LPBYTE)&status, sizeof(SERVICE_STATUS_PROCESS), &bytesNeeded)) {
-		// Check if the service is running
-		if (status.dwCurrentState == SERVICE_RUNNING) {
-			printf("The WinDivert service is running, stopping it...\n");
+    if (QueryServiceStatusEx(hService, SC_STATUS_PROCESS_INFO, 
+                           (LPBYTE)&status, sizeof(SERVICE_STATUS_PROCESS), &bytesNeeded)) {
+        if (status.dwCurrentState == SERVICE_RUNNING) {
+            printf("The WinDivert service is running, stopping it...\n");
+            if (ControlService(hService, SERVICE_CONTROL_STOP, (LPSERVICE_STATUS)&status)) {
+                printf("The WinDivert service stopped successfully.\n");
+            } else {
+                fprintf(stderr, "Failed to stop the WinDivert service: (%lu)\n", GetLastError());
+            }
+        } else {
+            printf("WinDivert service is not running.\n");
+        }
+    } else {
+        fprintf(stderr, "QueryServiceStatusEx failed (%lu)\n", GetLastError());
+    }
 
-			// Stop the service
-			if (ControlService(hService, SERVICE_CONTROL_STOP, (LPSERVICE_STATUS)&status)) {
-				printf("The WinDivert service stopped successfully.\n");
-			} else {
-				fprintf(stderr, "Failed to stop the WinDivert service: (%d)\n", GetLastError());
-			}
-		} else {
-			printf("WinDivert service is not running.\n");
-		}
-	} else {
-		fprintf(stderr, "QueryServiceStatusEx failed (%d)\n", GetLastError());
-	}
+    if (hService) CloseServiceHandle(hService);
+    if (hSCManager) CloseServiceHandle(hSCManager);
+}
 
-	// Clean up
-	CloseServiceHandle(hService);
-	CloseServiceHandle(hSCManager);
+// Check if the process is running with admin privileges
+int is_admin() {
+    BOOL is_admin = FALSE;
+    SID_IDENTIFIER_AUTHORITY nt_authority = SECURITY_NT_AUTHORITY;
+    PSID admin_group = NULL;
+
+    // Allocate and initialize SID for the Administrators group
+    if (AllocateAndInitializeSid(&nt_authority, 2, SECURITY_BUILTIN_DOMAIN_RID,
+                                 DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &admin_group)) {
+        // Check if the current token is a member of the Administrators group
+        if (!CheckTokenMembership(NULL, admin_group, &is_admin)) {
+            is_admin = FALSE;
+        }
+        FreeSid(admin_group);
+    }
+    return is_admin;
+}
+
+// Update and print statistics
+void print_statistics() {
+	if (!enable_statistics) return;
+
+    // Take atomic snapshots of all statistics
+    LONG processed = InterlockedExchangeAdd(&g_stats.packets_processed, 0);
+    LONG dropped_rate = InterlockedExchangeAdd(&g_stats.packets_dropped_rate_limit, 0);
+    LONG dropped_loss = InterlockedExchangeAdd(&g_stats.packets_dropped_loss, 0);
+    LONG delayed = InterlockedExchangeAdd(&g_stats.packets_delayed, 0);
+    LONG bytes = InterlockedExchangeAdd(&g_stats.bytes_processed, 0);
+    LONG invalid = InterlockedExchangeAdd(&g_stats.invalid_packets, 0);
+
+    printf("\n=== Bandwidth Shaper Statistics ===\n");
+    printf("Packets processed: %ld\n", processed);
+    printf("Bytes processed: %ld (%.2f MB)\n", bytes, bytes / 1048576.0);
+    printf("Packets dropped (rate limit): %ld\n", dropped_rate);
+    printf("Packets dropped (loss simulation): %ld\n", dropped_loss);
+    printf("Packets delayed: %ld\n", delayed);
+    printf("Invalid packets: %ld\n", invalid);
+
+    if (processed > 0) {
+        printf("Drop rate: %.2f%%\n", ((double)(dropped_rate + dropped_loss) / processed) * 100.0);
+    }
+    printf("===================================\n\n");
+}
+
+void update_statistics() {
+	if (!enable_statistics) return;
+
+    LARGE_INTEGER counter;
+    QueryPerformanceCounter(&counter);
+    
+    if ((counter.QuadPart - g_stats.last_stats_update) * 1000.0 / g_perf_frequency >= STATS_UPDATE_INTERVAL) {
+        print_statistics();
+        g_stats.last_stats_update = counter.QuadPart;
+    }
 }
 
 // Handler for control events (like Ctrl+C)
-BOOL ctrl_handler(DWORD fdwCtrlType) {
-	if (fdwCtrlType == CTRL_C_EVENT && !quit_program) {
-		printf("Ctrl+C pressed, stopping...\n");
-		quit_program = true;
-		return TRUE;
-	}
-	return FALSE;
+BOOL WINAPI console_ctrl_handler(DWORD dwCtrlType) {
+    switch (dwCtrlType) {
+        case CTRL_C_EVENT:
+        case CTRL_BREAK_EVENT:
+        case CTRL_CLOSE_EVENT:
+        case CTRL_LOGOFF_EVENT:
+        case CTRL_SHUTDOWN_EVENT:
+            printf("Emergency shutdown initiated...\n");
+            quit_program = true;
+            // Give main loop time to clean up properly
+            Sleep(1000);
+            return TRUE;
+        default:
+            return FALSE;
+    }
 }
 
 // Function to get the program's name without the .exe extension
 const char *get_program_name(const char *path) {
+    if (!path) return "unknown";
+    
     const char *name = strrchr(path, '\\'); // Look for last backslash (Windows path)
-    if (!name) name = strrchr(path, '/');  // Look for last slash (POSIX path)
-    if (name) name++;                      // Skip the slash
-    else name = path;                      // No slashes, use the whole path
+    if (!name) name = strrchr(path, '/');   // Look for last slash (POSIX path)
+    if (name) name++;  // Skip the slash
+    else name = path; // No slashes, use the whole path
 
-    // Remove the ".exe" extension if present
-    char *ext = strstr(name, ".exe");
-    if (ext && ext == name + strlen(name) - 4) { // Ensure ".exe" is at the end
-        static char buffer[MAX_PATH];           // Static buffer for the program name
-        strncpy(buffer, name, ext - name);      // Copy without ".exe"
-        buffer[ext - name] = '\0';
+    // Check for .exe extension
+    size_t name_len = strlen(name);
+    const char *ext = ".exe";
+    size_t ext_len = 4;
+    
+    if (name_len >= ext_len && 
+        _stricmp(name + name_len - ext_len, ext) == 0) {
+        
+        static char buffer[MAX_PATH];
+        size_t copy_len = name_len - ext_len;
+        
+        // Bounds check
+        if (copy_len >= MAX_PATH) {
+            copy_len = MAX_PATH - 1;
+        }
+        
+        strncpy(buffer, name, copy_len);
+        buffer[copy_len] = '\0';
         return buffer;
     }
 
-    return name; // Return the original name if no ".exe" extension
+    return name;
 }
 
 // Function to display help message
@@ -898,6 +1375,7 @@ void print_help(const char *program_path) {
     printf("  -n, --nic <interface_index>                  Throttle traffic for the specified network interfaces (comma-separated)\n");
     printf("            <NIC_INDEX:DL_RATE:UL_RATE>        For different global download and upload rate limits per NIC\n");
     printf("  -l, --list-nics                              List all available network interfaces\n");
+    printf("  -s, --statistics                             Enable statistics output (default: disabled)\n");
     printf("  -h, --help                                   Display this help message and exit\n");
 }
 
@@ -906,10 +1384,30 @@ int main(int argc, char *argv[]) {
 	srand((unsigned int)time(NULL));
 
 	// Set up the control handler
-	if (!SetConsoleCtrlHandler((PHANDLER_ROUTINE)ctrl_handler, TRUE)) {
+	if (!SetConsoleCtrlHandler((PHANDLER_ROUTINE)console_ctrl_handler, TRUE)) {
 		fprintf(stderr, "Failed to set control handler!\n");
 		return 1;
 	}
+
+	// Initialize performance counter frequency
+	LARGE_INTEGER freq;
+	QueryPerformanceFrequency(&freq);
+	g_perf_frequency = (double)freq.QuadPart;
+	
+	// Initialize delay buffer
+	if (!delay_buffer_init(&g_delay_buffer, DELAY_BUFFER_SIZE)) {
+		fprintf(stderr, "Failed to initialize delay buffer.\n");
+		return EXIT_FAILURE;
+	}
+
+	// Initialize statistics
+	g_stats.last_stats_update = get_time_ticks();
+
+	// Track if we modified the packet
+	bool packet_modified = false;
+	
+	// To process delayed packets less often
+	static int delay_process_counter = 0;
 
     // Default values for command-line parameters
     int priority = 0;
@@ -990,6 +1488,8 @@ int main(int argc, char *argv[]) {
             list_network_interfaces();
             WSACleanup();
             return EXIT_SUCCESS;
+		} else if ((strcmp(argv[i], "--statistics") == 0 || strcmp(argv[i], "-s") == 0)) {
+			enable_statistics = true;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_help(argv[0]);
             return EXIT_SUCCESS;
@@ -1003,43 +1503,41 @@ int main(int argc, char *argv[]) {
     // Validate required parameters	
 	if (download_rate < 0 || upload_rate < 0) {
 		fprintf(stderr, "Error: Download/Upload speed limit must not be negative.\n");
-		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 	
 	if (download_buffer_size < 0 || upload_buffer_size < 0) {
 		fprintf(stderr, "Error: Download/Upload buffer size must not be negative.\n");
-		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 
 	if (max_tcp_connections < 0) {
 		fprintf(stderr, "Error: The max TCP connection number cannot be negative.\n");
-		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 
 	if (max_udp_packets_per_second < 0) {
 		fprintf(stderr, "Error: The max UDP connection number cannot be negative.\n");
-		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 
 	if (packet_loss < 0.00f || packet_loss > 100.00f) {
 		fprintf(stderr, "Error: Packet loss percentage must be between 0 and 100.\n");
-		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 
 	if (latency_ms < 0) {
 		fprintf(stderr, "Error: Latency must not be negative.\n");
-		print_help(argv[0]);
 		return EXIT_FAILURE;
 	}
 	
 	if (params.nic_count == 0) {
 		fprintf(stderr, "Error: You must specify at least one NIC index with --nic.\n");
-		print_help(argv[0]);
+		return EXIT_FAILURE;
+	}
+
+	if (!is_admin()) {
+		fprintf(stderr, "Error: Not running as admin, please use an elevated command prompt - WinDivert cannot manage network operations without it.\n");
 		return EXIT_FAILURE;
 	}
 
@@ -1111,21 +1609,30 @@ int main(int argc, char *argv[]) {
 		printf("No processes were specified. Global bandwidth throttling will apply.\n");
 	}
 
-    // Initialize mutex for rate limit with error handling
-	if (!InitializeCriticalSectionAndSpinCount(&processparams.rate_limit_lock, 4000)) {
-		fprintf(stderr, "Failed to initialize critical section.\n");
-		goto cleanup_final2;
-	}
+	// Set token bucket and handle to zero
+    TokenBucket *download_buckets = NULL;
+    TokenBucket *upload_buckets = NULL;
+    HANDLE handle = INVALID_HANDLE_VALUE;
+    bool global_critical_section_initialized = false;
 
-	// Allocate token buckets for each NIC
-	TokenBucket *download_buckets = malloc(params.nic_count * sizeof(TokenBucket));
-	TokenBucket *upload_buckets = malloc(params.nic_count * sizeof(TokenBucket));
-	if (!download_buckets || !upload_buckets) {
-		fprintf(stderr, "Memory allocation failed for the token buckets.\n");
+    // Initialize critical section with error checking
+    if (!InitializeCriticalSectionAndSpinCount(&g_global_lock, 4000)) {
+        fprintf(stderr, "Failed to initialize global critical section.\n");
+        goto cleanup;
+    }
+    global_critical_section_initialized = true;
 
-		// Cleanup in case one allocation succeeded but the other failed
-		goto cleanup_final;
-	}
+    // Allocate token buckets
+    download_buckets = malloc(params.nic_count * sizeof(TokenBucket));
+    upload_buckets = malloc(params.nic_count * sizeof(TokenBucket));
+    if (!download_buckets || !upload_buckets) {
+        fprintf(stderr, "Memory allocation failed for token buckets.\n");
+        goto cleanup;
+    }
+
+	// Track initialization progress
+	int initialized_download_buckets = 0;
+	int initialized_upload_buckets = 0;
 
 	for (int i = 0; i < params.nic_count; i++) {
 		// If it is not set, use the global download and upload rate instead
@@ -1139,22 +1646,23 @@ int main(int argc, char *argv[]) {
 		// Initialize download bucket only if download limit is nonzero
 		if (params.download_limits[i] > 0) {
 			if (!token_bucket_init(&download_buckets[i], params.download_limits[i], download_buffer_size)) {
-				fprintf(stderr, "Failed to initialize a download bucket.\n");
-				goto cleanup_final;
+				fprintf(stderr, "Failed to initialize download bucket %d.\n", i);
+				goto cleanup;
 			}
+			initialized_download_buckets++;
 		}
 
 		// Initialize upload bucket only if upload limit is nonzero
 		if (params.upload_limits[i] > 0) {
 			if (!token_bucket_init(&upload_buckets[i], params.upload_limits[i], upload_buffer_size)) {
-				fprintf(stderr, "Failed to initialize an upload bucket.\n");
-				goto cleanup_final;
+				fprintf(stderr, "Failed to initialize upload bucket %d.\n", i);
+				goto cleanup;
 			}
+			initialized_upload_buckets++;
 		}
 	}
 
 	// Set up WinDivert
-	HANDLE handle;
 	char packet[MAX_PACKET_SIZE];
 	UINT packet_len;
 	WINDIVERT_ADDRESS addr;
@@ -1174,22 +1682,81 @@ int main(int argc, char *argv[]) {
 			default:   fprintf(stderr, "Error opening WinDivert: %lu\n", error);
 		}
 		//fprintf(stderr, "Error opening WinDivert handle: %lu\n", GetLastError());
-		goto cleanup_final;
+		goto cleanup;
+	}
+
+	// Create event handle for timeout for WinDivertRecv call
+	HANDLE recv_event = CreateEvent(NULL, FALSE, FALSE, NULL);
+	if (!recv_event) {
+		fprintf(stderr, "Failed to create event for timeout\n");
+		goto cleanup;
 	}
 
     // Main loop for processing packets
-    while (TRUE) {		
+    while (!quit_program) {  // Check quit_program at loop start
 		// Read a packet from the network
-		if (!WinDivertRecv(handle, packet, sizeof(packet), &packet_len, &addr)) {
-			fprintf(stderr, "Failed to receive packet: %lu\n", GetLastError());
-			continue;
+		DWORD recv_len;
+		OVERLAPPED overlapped = {0};
+		overlapped.hEvent = recv_event;
+		if (!WinDivertRecvEx(handle, packet, sizeof(packet), &recv_len, 0, &addr, NULL, &overlapped)) {
+			DWORD error = GetLastError();
+			if (error == ERROR_IO_PENDING) {
+				// Wait with timeout (100ms)
+				DWORD wait_result = WaitForSingleObject(overlapped.hEvent, 100);
+				if (wait_result == WAIT_TIMEOUT) {
+					CancelIo(handle);
+					continue; // Check quit_program flag
+				} else if (wait_result == WAIT_OBJECT_0) {
+					if (!GetOverlappedResult(handle, &overlapped, &recv_len, FALSE)) {
+						DWORD get_error = GetLastError();
+						if (get_error == ERROR_NO_MORE_ITEMS || get_error == ERROR_HANDLE_EOF) {
+							break;
+						}
+						continue;
+					}
+					packet_len = recv_len;
+				} else {
+					continue; // Error case
+				}
+			} else if (error == ERROR_NO_MORE_ITEMS || error == ERROR_HANDLE_EOF) {
+				break;
+			} else {
+				if (quit_program) break;
+				fprintf(stderr, "Failed to receive packet: %lu\n", error);
+				continue;
+			}
+		} else {
+			packet_len = recv_len;
 		}
 
-		// Check for 'Q' key to quit the program
-		HWND hwnd = GetConsoleWindow(); // Get handle to the console window
-		if (GetForegroundWindow() == hwnd && (GetAsyncKeyState('Q') & 0x8000)) {
-			printf("Exiting bandwidth throttler...\n");
-			break;
+		// Early exit check
+		if(quit_program) break;
+
+		// Update statistics
+		InterlockedIncrement(&g_stats.packets_processed);
+		InterlockedExchangeAdd(&g_stats.bytes_processed, packet_len);
+		update_statistics();
+
+		// Process delayed packets first
+		if (++delay_process_counter >= 10) { // Process every 10 packets instead of every packet
+			delay_process_counter = 0;
+			delay_buffer_process(&g_delay_buffer, handle);
+		}
+
+		// Validate packet before processing
+		if (!validate_packet(packet, packet_len)) {
+			continue; // Skip invalid packets
+		}
+
+		// Check for 'Q' key
+		static int key_check_counter = 0;
+		if (++key_check_counter >= 2) { // Check every 2 packets
+			key_check_counter = 0;
+			HWND hwnd = GetConsoleWindow();
+			if (GetForegroundWindow() == hwnd && (GetAsyncKeyState('Q') & 0x8000)) {
+				printf("Exiting bandwidth throttler...\n");
+				break;
+			}
 		}
 
 		// Get the NIC index
@@ -1272,6 +1839,7 @@ int main(int argc, char *argv[]) {
 			if (!token_bucket_consume(bucket, packet_len)) {
 				// Not enough tokens, so drop the packet (rate limiting in action)
 				//printf("Packet dropped due to rate limiting: %u bytes\n", packet_len);
+				InterlockedIncrement(&g_stats.packets_dropped_rate_limit);
 				continue;
 			}
 		}
@@ -1283,35 +1851,69 @@ int main(int argc, char *argv[]) {
 
 		// Simulate latency using non-blocking delay
 		if (latency_ms > 0) {
-			Sleep(latency_ms);  // Delay in milliseconds
+			//Sleep(latency_ms);  // Delay in milliseconds
+
+			// Calculate delay in ticks
+			LONGLONG delay_ticks = (LONGLONG)(latency_ms * g_perf_frequency / 1000.0);
+			
+			if (!delay_buffer_add(&g_delay_buffer, packet, packet_len, &addr, delay_ticks)) {
+				// Buffer full, process immediately
+				if (packet_modified) {
+					if (!WinDivertHelperCalcChecksums(packet, packet_len, &addr, 0)) {
+						fprintf(stderr, "Error: Checksum calculation failed. Skipping packet...\n");
+						continue;
+					}
+				}
+				reinject_packet(handle, packet, packet_len, &addr);
+			}
+			continue; // Don't reinject immediately if delayed
 		}
 
 		// Ensure packet checksums are valid
-		if (!WinDivertHelperCalcChecksums(packet, packet_len, &addr, 0)) {
-			fprintf(stderr, "Error: Checksum calculation failed. Skipping modified packet...\n");
-			continue;
+		if (packet_modified) {
+			if (!WinDivertHelperCalcChecksums(packet, packet_len, &addr, 0)) {
+				fprintf(stderr, "Error: Checksum calculation failed. Skipping modified packet...\n");
+				continue;
+			}
 		}
 
-		if(packet && packet_len > 0) reinject_packet(handle, packet, packet_len, &addr);
-
-		// If Ctrl+C was pressed, quit
-		if(quit_program) break;
+		reinject_packet(handle, packet, packet_len, &addr);
 	}
 
-	goto cleanup_final;
+	goto cleanup;
 
-	cleanup_final:
-		DeleteCriticalSection(&processparams.rate_limit_lock);
-		goto cleanup_final2;
+	cleanup:
+		// Process any remaining delayed packets before cleanup
+		if (handle != INVALID_HANDLE_VALUE) {
+			delay_buffer_process(&g_delay_buffer, handle);
+			delay_buffer_cleanup(&g_delay_buffer); // Clean up delay buffer after processing remaining packets
+		}
 
-	cleanup_final2:
-		// Destroy token buckets
-		free(download_buckets);
-		free(upload_buckets);
-		
-		// Other cleanup
-		WinDivertClose(handle);
-		WSACleanup();
+		// Print final statistics before cleaning up data structures
+		print_statistics();
+
+		if (recv_event != NULL) {
+			CloseHandle(recv_event);
+			recv_event = NULL;  // Prevent double-close
+		}
+
+		if (handle != INVALID_HANDLE_VALUE) {
+			WinDivertClose(handle);
+		}
+
+		if (global_critical_section_initialized) {
+			DeleteCriticalSection(&g_global_lock); // Clean up the single global lock
+		}
+
+		// Clean up only successfully initialized buckets
+		if (download_buckets) {
+			free(download_buckets);
+		}
+
+		if (upload_buckets) {
+			free(upload_buckets);
+		}
+
 		free(params.nic_indices);
 		free(params.download_limits);
 		free(params.upload_limits);
@@ -1321,8 +1923,7 @@ int main(int argc, char *argv[]) {
 			free_pid_map(processparams.pid_map);
 		}
 
-		// This closes the WinDivert service before exit
+		WSACleanup();
 		stop_windivert();
-
 		return EXIT_SUCCESS;
 }
