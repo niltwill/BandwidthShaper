@@ -8,6 +8,19 @@ This application uses [WinDivert](https://reqrypt.org/windivert.html) to accompl
 
 WinDivert itself should support the most recent Windows operating systems, starting from Windows Vista and Windows Server 2008. It does not support older Windows versions like Windows XP. For that, you can use [Traffic Shaper XP](https://www.majorgeeks.com/files/details/traffic_shaper_xp.html) instead.
 
+## Why bother?
+
+You may ask: why would you ever need to use bandwidth throttling, anyway? Well, maybe you're in a good location where you don't ever actually need to do so. Indeed, most users never suffer when unlimited fiber/5G lets you go with "full blast" mode without feeling the consequences, but this is not always the case everywhere.
+
+Consider the following scenarios:
+
+* **Data caps / metered connections:** Mobile hotspots, capped home plans, or roaming where you don't want one background sync (OneDrive, Steam updates, Windows Update, etc.) to burn through your monthly allowance. Per-process quotas (e.g., "Chrome gets 500MB/day download quota") prevent surprises.
+* **Scheduling**: You can run heavy downloads/uploads only during off-peak hours (cheaper electricity, less interference with work/gaming/family streaming). Or restrict weekdays vs. weekends as reuqired.
+* **Per-process granularity:** Not just stick to global caps, but decide which app gets how much DL and UL max, while others run unrestricted. Crucial when one process (torrent client, game patcher, video encoder) hogs the pipe (and it has no speed limit option).
+* **Asymmetric connections (ADSL/VDSL/cable):** Upload saturation is brutal here: even a modest 5–10 Mbps upload (think of a YouTube 1080p stream, a large file backup, or cloud sync) can spike latency to 500–1000ms+ because the ACK packets for downloads get queued behind uploads. This means that browsing feels like dial-up (pages timeout, media content buffers forever). Throttling upload to ~80–90% of line rate leaves headroom for interactive traffic. Same for heavy downloads overwhelming buffers on the ISP side.
+
+These are common use cases for many on non-gigabit links or capped plans.
+
 ## Two Editions
 
 BandwidthShaper comes in two editions now: GUI and CLI. Previously, only the CLI application existed, but with the GUI, it's a lot more user-friendly. No installation required, just extract to a suitable location and run with administrator privileges.
@@ -179,8 +192,6 @@ sc query WinDivert  # Check status
 ---
 
 ## Background Info
-Why was this made? The reason being is that most apps that serve this purpose can be rather complex (with many extra features) and they are usually commercial in Windows, such as [NetLimiter](https://www.netlimiter.com), [NetBalancer](https://netbalancer.com) or [SoftPerfect Bandwidth Manager](https://www.softperfect.com/products/bandwidth). At best, you can use [TMeter](http://www.tmeter.ru/en) as a free option. None of these were really appealing to me for simple bandwidth throttling (and I had no other extra need!). Now, if you ever had to use an ADSL/VDSL connection, you will know how much the upload saturation sucks, even with a smaller file. Downloading a larger file can also lead to network saturation. When this happens, browsing a website simply becomes a nightmare, as if you had a very poor connection. However, a little limit on both the download and upload speed will fix this issue. So I needed the most lightweight and portable option to throttle my download and upload speed, I did not need much else. I couldn't be bothered with router or firewall shenanigans, and a quick "on or off" via a simple tool was what I required.
-
-Therefore, this app is only useful if you want to limit the bandwidth, either globally or for certain processes - and you really don't want much more than that. If you want other network-related features, like filtering, traffic monitoring, packet logging, quotas, predefined rules or policies, priorities per process/app, predefined break periods with alternate rate limits or no throttling, etc., then this is not the networking tool for that. For those extra features, some of the earlier mentioned apps are going to do a much better job (the downside is that they are commercial, but hey, something for something!). Of course, if that does not suit you, you're always free to fork the source code and expand on this as you'd like, you may even add a GUI! Feel free to do with it as you want (although mentioning me in the credits would be a nice gesture).
+Why was this made? The reason being is that most apps that serve this purpose can be rather complex (with many extra features) and they are usually commercial in Windows, such as [NetLimiter](https://www.netlimiter.com), [NetBalancer](https://netbalancer.com) or [SoftPerfect Bandwidth Manager](https://www.softperfect.com/products/bandwidth). At best, you can use [TMeter](http://www.tmeter.ru/en) as a free option. None of these were really appealing to me for simple bandwidth throttling (and I had no other extra need!). Now, if you ever had to use an ADSL/VDSL connection, you will know how much the upload saturation sucks, even with a smaller file. Downloading a larger file can also lead to network saturation. When this happens, browsing a website simply becomes a nightmare, as if you had a very poor connection.
 
 **Note:** It should go without saying, but this tool is not meant to limit the bandwidth of other computers in a network. Most likely your computer does not act as a router (gateway machine), so you will not be able to see the traffic of other users in a typical home, office or work environment. Assuming you're in a sys admin role, you're much better off using a router or firewall with pfSense or similar that has traffic shaping support or QoS, or running a transparent proxy like Squid. This small tool is for very simple use cases only. Always choose the right tool for the required job.
