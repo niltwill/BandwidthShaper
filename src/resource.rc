@@ -1,1 +1,194 @@
-MAIN ICON "bt-app.ico"
+#include <winresrc.h>
+#include "resource.h"
+
+// Declare DPI awareness
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
+
+// Icon
+1 ICON "bt-app.ico"
+
+// --------------------------------------------------------------------
+// Menu
+// --------------------------------------------------------------------
+IDR_MAIN_MENU MENU
+BEGIN
+    POPUP "&File"
+    BEGIN
+        MENUITEM "&Locate process...\t(Alt+L)",   ID_FILE_LOCATE_PROC
+        MENUITEM "&Specify process...\t(Alt+P)",  ID_FILE_SPECIFY_PROC
+        MENUITEM "&Remove sticky entry\t(Alt+R)", ID_FILE_REMOVE_CUSTOM
+        MENUITEM SEPARATOR
+        MENUITEM "E&xit\t(Alt+F4)",               ID_FILE_EXIT
+    END
+
+    POPUP "&View"
+    BEGIN
+        MENUITEM "&Refresh Processes\t(F5)", ID_VIEW_REFRESH
+        MENUITEM "E&xpand All\t(Alt++)",     ID_VIEW_EXPAND_ALL
+        MENUITEM "C&ollapse All\t(Alt+-)",   ID_VIEW_COLLAPSE_ALL
+        MENUITEM SEPARATOR
+        POPUP "Update &Frequency"
+        BEGIN
+            MENUITEM "Often (1 s)",     ID_FREQ_OFTEN
+            MENUITEM "Normal (2 s)",    ID_FREQ_NORMAL
+            MENUITEM "Slower (15 s)",   ID_FREQ_SLOWER
+            MENUITEM "Scarcely (45 s)", ID_FREQ_SCARCELY
+            MENUITEM "Rarely (2 min)",  ID_FREQ_RARELY
+            MENUITEM SEPARATOR
+            MENUITEM "Disabled",        ID_FREQ_DISABLED
+        END
+        POPUP "&Processes"
+        BEGIN
+            MENUITEM "Show &All\t(Alt+A)",          ID_PROC_SHOW_ALL
+            MENUITEM "Show only s&ticky\t(Alt+S)",  ID_PROC_SHOW_CUSTOM
+            MENUITEM "Show only &running\t(Alt+C)", ID_PROC_SHOW_RUNNING
+        END
+        MENUITEM SEPARATOR
+        MENUITEM "&Options\t(Ctrl+O)",     ID_VIEW_OPTIONS
+        MENUITEM "&Statistics\t(Ctrl+S)",  ID_VIEW_STATS
+    END
+
+    POPUP "&Help"
+    BEGIN
+        MENUITEM "&About", ID_HELP_ABOUT
+    END
+END
+
+// --------------------------------------------------------------------
+// Options Dialog
+// --------------------------------------------------------------------
+IDD_OPTIONS_DIALOG DIALOGEX 0, 0, 420, 380
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Options"
+FONT 9, "Segoe UI"
+BEGIN
+    // Global Limits Group
+    GROUPBOX "Global Bandwidth Limits", IDC_STATIC, 8, 8, 200, 60
+    LTEXT "Download:", IDC_STATIC, 16, 24, 50, 10
+    EDITTEXT IDC_OPT_DL_GLOBAL, 70, 22, 60, 12, ES_NUMBER
+    LTEXT "KB/s (0 = unlimited)", IDC_STATIC, 135, 24, 70, 10
+    
+    LTEXT "Upload:", IDC_STATIC, 16, 44, 50, 10
+    EDITTEXT IDC_OPT_UL_GLOBAL, 70, 42, 60, 12, ES_NUMBER
+    LTEXT "KB/s (0 = unlimited)", IDC_STATIC, 135, 44, 70, 10
+    
+    // NIC Selection Group
+    GROUPBOX "Network Interfaces", IDC_STATIC, 220, 8, 190, 100
+    LTEXT "Selected NICs:", IDC_STATIC, 228, 24, 60, 10
+    LISTBOX IDC_OPT_NIC_LIST, 228, 36, 174, 64, LBS_MULTIPLESEL | WS_VSCROLL | WS_TABSTOP
+    
+    // Buffer Settings Group
+    GROUPBOX "Buffer Settings", IDC_STATIC, 8, 75, 200, 75
+    LTEXT "Download buffer:", IDC_STATIC, 16, 91, 70, 10
+    EDITTEXT IDC_OPT_DL_BUFFER, 90, 89, 60, 12, ES_NUMBER
+    LTEXT "bytes", IDC_STATIC, 155, 91, 25, 10
+    
+    LTEXT "Upload buffer:", IDC_STATIC, 16, 111, 70, 10
+    EDITTEXT IDC_OPT_UL_BUFFER, 90, 109, 60, 12, ES_NUMBER
+    LTEXT "bytes", IDC_STATIC, 155, 111, 25, 10
+    
+    LTEXT "Burst size:", IDC_STATIC, 16, 131, 70, 10
+    EDITTEXT IDC_OPT_BURST_SIZE, 90, 129, 60, 12, ES_NUMBER
+    LTEXT "bytes (0 = auto)", IDC_STATIC, 155, 131, 50, 10
+    
+    // Process Update Group
+    GROUPBOX "Process Update Interval", IDC_STATIC, 8, 155, 200, 85
+    LTEXT "Update every:", IDC_STATIC, 16, 171, 55, 10
+    EDITTEXT IDC_OPT_UPDATE_INTERVAL, 75, 169, 50, 12, ES_NUMBER
+    
+    CONTROL "Packets", IDC_OPT_UPDATE_TYPE, "Button", BS_AUTORADIOBUTTON | WS_GROUP,
+            130, 171, 50, 10
+    CONTROL "Milliseconds", IDC_OPT_UPDATE_TYPE + 1, "Button", BS_AUTORADIOBUTTON,
+            130, 185, 60, 10
+    
+    LTEXT "Cooldown:", IDC_STATIC, 16, 205, 55, 10
+    EDITTEXT IDC_OPT_UPDATE_COOLDOWN, 75, 203, 50, 12, ES_NUMBER
+    LTEXT "ms", IDC_STATIC, 130, 205, 20, 10
+    
+    // Advanced Group
+    GROUPBOX "Advanced", IDC_STATIC, 220, 115, 190, 145
+    LTEXT "Data cap:", IDC_STATIC, 228, 131, 40, 10
+    EDITTEXT IDC_OPT_DATA_CAP, 275, 129, 60, 12, ES_NUMBER
+    LTEXT "MB (0 = unlimited)", IDC_STATIC, 340, 131, 60, 10
+    
+    LTEXT "TCP conn limit:", IDC_STATIC, 228, 151, 60, 10
+    EDITTEXT IDC_OPT_TCP_LIMIT, 295, 149, 50, 12, ES_NUMBER
+    LTEXT "(0 = unlimited)", IDC_STATIC, 350, 151, 55, 10
+    
+    LTEXT "UDP conn limit:", IDC_STATIC, 228, 171, 60, 10
+    EDITTEXT IDC_OPT_UDP_LIMIT, 295, 169, 50, 12, ES_NUMBER
+    LTEXT "(0 = unlimited)", IDC_STATIC, 350, 171, 55, 10
+    
+    LTEXT "Latency:", IDC_STATIC, 228, 191, 40, 10
+    EDITTEXT IDC_OPT_LATENCY, 295, 189, 50, 12, ES_NUMBER
+    LTEXT "ms", IDC_STATIC, 350, 191, 20, 10
+    
+    LTEXT "Packet loss:", IDC_STATIC, 228, 211, 50, 10
+    EDITTEXT IDC_OPT_PACKET_LOSS, 295, 209, 50, 12
+    LTEXT "%", IDC_STATIC, 350, 211, 10, 10
+    
+    LTEXT "Priority:", IDC_STATIC, 228, 231, 40, 10
+    EDITTEXT IDC_OPT_PRIORITY, 295, 229, 50, 12
+    
+    // Behavior Group
+    GROUPBOX "Behavior", IDC_STATIC, 8, 245, 200, 80
+    CONTROL "Minimize to system tray", IDC_OPT_MINIMIZE_TRAY, "Button",
+            BS_AUTOCHECKBOX | WS_TABSTOP, 16, 261, 180, 10
+    CONTROL "Remember settings on exit", IDC_OPT_SAVE_SETTINGS, "Button",
+            BS_AUTOCHECKBOX | WS_TABSTOP, 16, 277, 180, 10
+    CONTROL "Remember sticky processes on exit", IDC_OPT_SAVE_STICKY_SETTINGS, "Button",
+            BS_AUTOCHECKBOX | WS_TABSTOP, 16, 293, 180, 10
+    
+    // Buttons
+    DEFPUSHBUTTON "OK", IDOK, 270, 354, 60, 16
+    PUSHBUTTON "Cancel", IDCANCEL, 340, 354, 60, 16
+END
+
+// --------------------------------------------------------------------
+// Specify Process (lightweight name-entry dialog)
+// --------------------------------------------------------------------
+IDD_SPECIFY_PROC DIALOGEX 0, 0, 230, 64
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Specify Process"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT "Process name (without .exe):", IDC_STATIC, 8, 8, 160, 10
+    EDITTEXT IDC_SPECIFY_NAME, 8, 22, 214, 12, ES_AUTOHSCROLL
+    DEFPUSHBUTTON "Add",    IDOK,     112, 44, 50, 14
+    PUSHBUTTON    "Cancel", IDCANCEL, 172, 44, 50, 14
+END
+
+// --------------------------------------------------------------------
+// Statistics Window (not modal)
+// --------------------------------------------------------------------
+IDD_STATS_DIALOG DIALOGEX 0, 0, 500, 500
+STYLE DS_SETFONT | WS_OVERLAPPEDWINDOW
+CAPTION "Statistics - BandwidthShaper"
+FONT 9, "Segoe UI"
+BEGIN
+    // Download chart
+    LTEXT "Download History", IDC_STATIC_DL_LABEL, 8, 8, 100, 10
+    CONTROL "", IDC_STATS_DL_CHART, "STATIC", SS_BLACKRECT | WS_BORDER,
+            8, 20, 480, 80
+
+    // Upload chart
+    LTEXT "Upload History", IDC_STATIC_UL_LABEL, 8, 108, 100, 10
+    CONTROL "", IDC_STATS_UL_CHART, "STATIC", SS_BLACKRECT | WS_BORDER,
+            8, 120, 480, 80
+
+    // Per-process traffic list with label
+    LTEXT "Per-Process Traffic", IDC_STATIC_PROC_LIST_LABEL, 8, 210, 100, 10
+    CONTROL "", IDC_STATS_PROC_LIST, "SysListView32", 
+            LVS_REPORT | LVS_SINGLESEL | WS_BORDER | WS_TABSTOP,
+            8, 222, 480, 150
+
+    // Statistics text with label
+    LTEXT "Statistics:", IDC_STATIC_STATS_LABEL, 8, 380, 50, 10
+    EDITTEXT IDC_STATS_TEXT, 8, 395, 480, 70, ES_MULTILINE | ES_READONLY |
+             WS_VSCROLL | ES_AUTOVSCROLL | NOT WS_TABSTOP
+
+    // Buttons
+    PUSHBUTTON "&Save Statistics", IDC_STATS_SAVE, 8, 470, 110, 23
+    PUSHBUTTON "&Reset Statistics", IDC_STATS_RESET, 126, 470, 110, 23
+    DEFPUSHBUTTON "&Close", IDCLOSE, 378, 470, 110, 23
+END
