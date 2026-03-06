@@ -186,7 +186,7 @@ If the shaper exits uncleanly, the driver may remain loaded, so either reboot to
 ```
 sc stop WinDivert
 sc delete WinDivert
-sc query WinDivert  # Check status
+sc query WinDivert
 ```
 
 ---
