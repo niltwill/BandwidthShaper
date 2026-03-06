@@ -14,6 +14,8 @@ BandwidthShaper comes in two editions now: GUI and CLI. Previously, only the CLI
 
 ### GUI version
 
+![Screenshot of the GUI app with a sticky process](bandwidthshaper-gui.jpg)
+
 The GUI app should be pretty self-explanatory and easy to use, but here's a little help to get started:
 
 * Run `BandwidthShaper.exe` as Administrator
