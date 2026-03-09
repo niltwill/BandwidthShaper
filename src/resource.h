@@ -81,6 +81,10 @@
 #define IDC_OPT_APPLY                3017
 #define IDC_OPT_SAVE_SETTINGS        3019
 #define IDC_OPT_SAVE_STICKY_SETTINGS 3020
+#define IDC_OPT_CONFIG_DIR           3021
+#define IDC_OPT_CONFIG_DIR_BROWSE    3022
+#define IDC_OPT_SNAPSHOT_DIR         3023
+#define IDC_OPT_SNAPSHOT_DIR_BROWSE  3024
 
 // "Specify process" input dialog
 #define IDD_SPECIFY_PROC        105
