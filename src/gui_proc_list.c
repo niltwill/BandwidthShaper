@@ -1412,6 +1412,7 @@ void Sticky_Load(void) {
 }
 
 void Sticky_Save(void) {
+    if (!g_app.options.save_sticky_settings || !g_app.options.save_settings) return;
     wchar_t cfg[MAX_PATH];
     if (!Settings_GetPath(cfg, MAX_PATH)) return;
     const wchar_t *S = L"StickyProcesses";

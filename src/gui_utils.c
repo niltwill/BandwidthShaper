@@ -753,8 +753,14 @@ BOOL CALLBACK EnumChildProc(HWND hWnd, LPARAM lParam) {
                 SetWindowLong(hWnd, GWL_STYLE,
                     (style & ~BS_TYPEMASK) | BS_OWNERDRAW);
                 SetWindowTheme(hWnd, L"", L""); // remove visual-style chrome
+            } else if (btnType == BS_GROUPBOX) {
+                // Custom-paint groupboxes so the label text is not
+                // overdrawn by the border line (DarkMode_Explorer does not
+                // leave a gap for the caption as the default theme does).
+                SetWindowTheme(hWnd, L"", L"");  // disable visual-style border
+                SetWindowSubclass(hWnd, GroupBoxSubclassProc, 0, 0);
             } else {
-                // Checkboxes, radio buttons, group boxes
+                // Checkboxes, radio buttons
                 SetWindowTheme(hWnd, L"DarkMode_Explorer", NULL);
             }
         }
@@ -793,6 +799,8 @@ BOOL CALLBACK EnumChildProc(HWND hWnd, LPARAM lParam) {
                 DWORD restore = (ctlId == IDOK || ctlId == IDYES)
                                 ? BS_DEFPUSHBUTTON : BS_PUSHBUTTON;
                 SetWindowLong(hWnd, GWL_STYLE, (style & ~BS_TYPEMASK) | restore);
+            } else if (btnType == BS_GROUPBOX) {
+                RemoveWindowSubclass(hWnd, GroupBoxSubclassProc, 0);
             }
             SetWindowTheme(hWnd, L"Explorer", NULL);
         }
@@ -932,6 +940,101 @@ void DrawDarkButton(LPDRAWITEMSTRUCT dis) {
 // ---------------------------------------------------------------------------
 // Dark mode - subclasses (custom dark theme overrides)
 // ---------------------------------------------------------------------------
+LRESULT CALLBACK GroupBoxSubclassProc(HWND hWnd, UINT msg, WPARAM wParam,
+                                      LPARAM lParam, UINT_PTR uIdSubclass,
+                                      DWORD_PTR dwRefData) {
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+
+        // Background
+        HBRUSH hBg = CreateSolidBrush(g_app.dark_bg);
+        FillRect(hdc, &rc, hBg);
+        DeleteObject(hBg);
+
+        // Caption text
+        wchar_t caption[256] = {0};
+        GetWindowTextW(hWnd, caption, 256);
+
+        HFONT hFont = (HFONT)SendMessageW(hWnd, WM_GETFONT, 0, 0);
+        HFONT hOldFont = hFont ? (HFONT)SelectObject(hdc, hFont) : NULL;
+
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, g_app.dark_text);
+
+        // Measure the caption so we know the gap width.
+        // The standard groupbox indents the text by 8 DLUs ~ 9 px at 96 dpi;
+        // we use a fixed 8px indent which looks consistent with the system style.
+        const int TEXT_INDENT = 8;
+        const int TEXT_PAD = 3;  // extra space left/right around the text
+        SIZE textSize = {0, 0};
+        if (caption[0])
+            GetTextExtentPoint32W(hdc, caption, (int)wcslen(caption), &textSize);
+
+        // Top of the border line: roughly half the text height down from top
+        int borderTop = (textSize.cy > 0) ? textSize.cy / 2 : 6;
+
+        // Border (four segments, leaving a gap for the caption)
+        HPEN hPen = CreatePen(PS_SOLID, 1, DARK_BTN_BORDER);
+        HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+
+        int gapLeft  = TEXT_INDENT - TEXT_PAD;
+        int gapRight = TEXT_INDENT + textSize.cx + TEXT_PAD * 2;
+
+        // Clamp gapRight so it never exceeds the right edge
+        if (gapRight > rc.right - 2) gapRight = rc.right - 2;
+
+        if (caption[0]) {
+            // Top-left segment  (from left edge to gap start)
+            MoveToEx(hdc, rc.left, borderTop, NULL);
+            LineTo(hdc, gapLeft, borderTop);
+            // Top-right segment (from gap end to right edge)
+            MoveToEx(hdc, gapRight, borderTop, NULL);
+            LineTo(hdc, rc.right-1, borderTop);
+        } else {
+            // No caption: unbroken top line
+            MoveToEx(hdc, rc.left, borderTop, NULL);
+            LineTo(hdc, rc.right-1, borderTop);
+        }
+        // Right side
+        MoveToEx(hdc, rc.right-1, borderTop,    NULL);
+        LineTo(hdc, rc.right-1, rc.bottom-1);
+        // Bottom
+        MoveToEx(hdc, rc.right-1, rc.bottom-1,  NULL);
+        LineTo(hdc, rc.left, rc.bottom-1);
+        // Left side
+        MoveToEx(hdc, rc.left, rc.bottom-1,  NULL);
+        LineTo(hdc, rc.left, borderTop);
+
+        SelectObject(hdc, hOldPen);
+        DeleteObject(hPen);
+
+        // Draw caption
+        if (caption[0]) {
+            RECT textRc = { TEXT_INDENT, 0, gapRight, textSize.cy };
+            DrawTextW(hdc, caption, -1, &textRc,
+                      DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOCLIP);
+        }
+
+        if (hOldFont) SelectObject(hdc, hOldFont);
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+
+    case WM_ERASEBKGND:
+        return 1;  // handled in WM_PAINT
+
+    case WM_NCDESTROY:
+        RemoveWindowSubclass(hWnd, GroupBoxSubclassProc, uIdSubclass);
+        break;
+    }
+    return DefSubclassProc(hWnd, msg, wParam, lParam);
+}
+
 LRESULT CALLBACK ToolbarPanelSubclassProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
     if (msg == WM_DRAWITEM) {
         // Forward to Main Window where the DrawDarkButton logic resides
@@ -1230,43 +1333,169 @@ void RestoreFromTray(void) {
 }
 
 // ---------------------------------------------------------------------------
-// Persistent settings helpers
+// Path helpers
 // ---------------------------------------------------------------------------
-// Build absolute path to "BandwidthShaper.cfg" next to the executable
-// Returns false if GetModuleFileNameW fails
-bool Settings_GetPath(wchar_t *path, DWORD cchPath) {
-    if (!GetModuleFileNameW(NULL, path, cchPath)) return false;
+// GetExeDir - fills buf with the exe directory (with trailing backslash)
+static void GetExeDir(wchar_t *buf, DWORD cch) {
+    if (!GetModuleFileNameW(NULL, buf, cch)) { buf[0] = L'\0'; return; }
+    wchar_t *sep = wcsrchr(buf, L'\\');
+    if (!sep) sep = wcsrchr(buf, L'/');
+    if (sep) *(sep + 1) = L'\0'; else buf[0] = L'\0';
+}
 
-    // Replace the filename portion with our config filename
-    wchar_t *last_sep = wcsrchr(path, L'\\');
-    if (!last_sep) last_sep = wcsrchr(path, L'/');
-    if (last_sep) {
-        *(last_sep + 1) = L'\0';
-    } else {
-        path[0] = L'\0';   // fallback: current directory
+// ResolveOrFallbackDir
+// Validates "dir" and, if it doesn't exist yet, attempts to create it
+// (including intermediate directories).  Writes the resolved path (with
+// trailing backslash) into "out" on success.  Falls back to the exe
+// directory and returns false if the path is invalid or creation fails.
+// An empty "dir" is treated as "use the exe directory" (returns true).
+bool ResolveOrFallbackDir(const wchar_t *dir, wchar_t *out, DWORD cchOut) {
+    // Empty string -> default to exe dir (not an error)
+    if (!dir || dir[0] == L'\0') {
+        GetExeDir(out, cchOut);
+        return true;
     }
+
+    // Resolve to an absolute path first
+    wchar_t full[MAX_PATH];
+    if (!GetFullPathNameW(dir, MAX_PATH, full, NULL) || full[0] == L'\0') {
+        GetExeDir(out, cchOut);
+        return false;
+    }
+
+    // Check whether it already exists
+    DWORD attr = GetFileAttributesW(full);
+    if (attr != INVALID_FILE_ATTRIBUTES) {
+        if (!(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+            // A file with that name exists - can't use it as a folder
+            GetExeDir(out, cchOut);
+            return false;
+        }
+        // Already a valid directory - ensure trailing backslash
+        size_t len = wcslen(full);
+        if (len > 0 && full[len-1] != L'\\' && full[len-1] != L'/') {
+            if (len + 2 < MAX_PATH) { full[len] = L'\\'; full[len+1] = L'\0'; }
+        }
+        wcsncpy(out, full, cchOut - 1); out[cchOut - 1] = L'\0';
+        return true;
+    }
+
+    // Doesn't exist - create it (with any intermediate components)
+    wchar_t tmp[MAX_PATH];
+    wcsncpy(tmp, full, MAX_PATH - 1); tmp[MAX_PATH - 1] = L'\0';
+    // Strip trailing separator before walking
+    size_t tlen = wcslen(tmp);
+    if (tlen > 0 && (tmp[tlen-1] == L'\\' || tmp[tlen-1] == L'/'))
+        tmp[--tlen] = L'\0';
+
+    // Walk each path component and create directories as we go
+    wchar_t *start = tmp + (tmp[1] == L':' ? 3 : 1);
+    for (wchar_t *p = start; *p; p++) {
+        if (*p == L'\\' || *p == L'/') {
+            wchar_t save = *p; *p = L'\0';
+            CreateDirectoryW(tmp, NULL);  // silently OK if it already exists
+            *p = save;
+        }
+    }
+    // Create the deepest component
+    if (!CreateDirectoryW(tmp, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
+        GetExeDir(out, cchOut);
+        return false;
+    }
+
+    // Add trailing backslash and return
+    tlen = wcslen(tmp);
+    if (tlen > 0 && tmp[tlen-1] != L'\\') {
+        if (tlen + 2 < MAX_PATH) { tmp[tlen] = L'\\'; tmp[tlen+1] = L'\0'; }
+    }
+    wcsncpy(out, tmp, cchOut - 1); out[cchOut - 1] = L'\0';
+    return true;
+}
+
+// Build absolute path to "BandwidthShaper.cfg".
+// Uses g_app.options.config_dir when set; falls back to the exe directory.
+bool Settings_GetPath(wchar_t *path, DWORD cchPath) {
+    wchar_t dir[MAX_PATH];
+    ResolveOrFallbackDir(g_app.options.config_dir, dir, MAX_PATH);
+
+    if (dir[0] == L'\0') {
+        // Last resort: write relative to current directory
+        wcsncpy(path, L"BandwidthShaper.cfg", cchPath - 1);
+        path[cchPath - 1] = L'\0';
+        return true;
+    }
+
+    // dir already ends with a backslash
+    wcsncpy(path, dir, cchPath - 1);
+    path[cchPath - 1] = L'\0';
     wcsncat(path, L"BandwidthShaper.cfg", cchPath - wcslen(path) - 1);
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Persistent settings helpers
+// ---------------------------------------------------------------------------
+
 // Settings_Save
-// Writes every persisted field to the INI file
-// (Does nothing if g_app.options.save_settings is false)
+// Writes every persisted field to the INI file.
+// Does nothing if g_app.options.save_settings is false AND both custom
+// directory fields are empty (nothing at all to record).
+//
+// Redirect file: if a custom config_dir is set, a tiny redirect record
+// (containing only ConfigDir and SnapshotDir) is always written to the
+// exe-directory path so the next launch can find the real config.  The
+// full settings are then written to the custom-dir path.
 void Settings_Save(void) {
-    if (!g_app.options.save_settings) return;
-
-    wchar_t path[MAX_PATH];
-    if (!Settings_GetPath(path, MAX_PATH)) return;
-
-    const wchar_t *S = L"Settings";   // INI section name shorthand
+    const wchar_t *S = L"Settings";
     wchar_t buf[512];
 
+    // Build the exe-directory path (always the bootstrap location)
+    wchar_t exe_dir[MAX_PATH];
+    GetExeDir(exe_dir, MAX_PATH);
+    wchar_t default_path[MAX_PATH];
+    swprintf(default_path, MAX_PATH, L"%sBandwidthShaper.cfg", exe_dir);
+
+    // Build the authoritative (possibly custom) path
+    wchar_t auth_path[MAX_PATH];
+    if (!Settings_GetPath(auth_path, MAX_PATH)) return;
+
+    bool has_custom_dir = (g_app.options.config_dir[0]   != L'\0' ||
+                           g_app.options.snapshot_dir[0] != L'\0');
+
+    // If nothing is to be saved at all, clean up and return
+    if (!g_app.options.save_settings && !has_custom_dir) {
+        DeleteFileW(default_path);
+        // auth_path == default_path in this case, so one delete is enough
+        return;
+    }
+
+    // Write the redirect record to the exe-dir path
+    // This lets Settings_Load bootstrap correctly on the next launch even
+    // when the full config lives elsewhere.  Only written when the custom
+    // path differs from the default; if they're the same there is no need
+    // for a separate redirect.
+    if (_wcsicmp(auth_path, default_path) != 0) {
+        // Write only the two dir keys + a minimal marker so the file is
+        // recognisably ours.  Full settings live in auth_path.
+        WritePrivateProfileStringW(S, L"ConfigDir",   g_app.options.config_dir,   default_path);
+        WritePrivateProfileStringW(S, L"SnapshotDir", g_app.options.snapshot_dir, default_path);
+    } else {
+        // Custom dirs are empty (or point back to exe dir) - no redirect
+        // file needed; remove it if it happens to exist from a previous run.
+        if (!g_app.options.save_settings)
+            DeleteFileW(default_path);
+    }
+
+    // If full saving is disabled, we're done after writing the redirect
+    if (!g_app.options.save_settings) return;
+
+    // Write full settings to auth_path
     // Global limits (stored as bytes/sec, written as KB/s integers)
     swprintf(buf, 512, L"%u", (unsigned)(g_app.options.global_dl_limit / 1000.0 + 0.5));
-    WritePrivateProfileStringW(S, L"GlobalDLLimit_KBs", buf, path);
+    WritePrivateProfileStringW(S, L"GlobalDLLimit_KBs", buf, auth_path);
 
     swprintf(buf, 512, L"%u", (unsigned)(g_app.options.global_ul_limit / 1000.0 + 0.5));
-    WritePrivateProfileStringW(S, L"GlobalULLimit_KBs", buf, path);
+    WritePrivateProfileStringW(S, L"GlobalULLimit_KBs", buf, auth_path);
 
     // NIC selection - stored as semicolon-separated Description strings
     {
@@ -1303,52 +1532,91 @@ void Settings_Save(void) {
         }
         free(pAdapters);
 
-        WritePrivateProfileStringW(S, L"SelectedNICs", desc_list, path);
+        WritePrivateProfileStringW(S, L"SelectedNICs", desc_list, auth_path);
     }
 
     // Buffer / burst
     swprintf(buf, 512, L"%u", g_app.options.dl_buffer);
-    WritePrivateProfileStringW(S, L"DLBuffer", buf, path);
+    WritePrivateProfileStringW(S, L"DLBuffer", buf, auth_path);
 
     swprintf(buf, 512, L"%u", g_app.options.ul_buffer);
-    WritePrivateProfileStringW(S, L"ULBuffer", buf, path);
+    WritePrivateProfileStringW(S, L"ULBuffer", buf, auth_path);
 
     swprintf(buf, 512, L"%d", g_app.options.burst_size);
-    WritePrivateProfileStringW(S, L"BurstSize", buf, path);
+    WritePrivateProfileStringW(S, L"BurstSize", buf, auth_path);
 
     // Process update interval
     swprintf(buf, 512, L"%u", g_app.options.update_interval);
-    WritePrivateProfileStringW(S, L"UpdateInterval", buf, path);
+    WritePrivateProfileStringW(S, L"UpdateInterval", buf, auth_path);
 
     WritePrivateProfileStringW(S, L"UpdateByPackets",
-                               g_app.options.update_by_packets ? L"1" : L"0", path);
+                               g_app.options.update_by_packets ? L"1" : L"0", auth_path);
 
     swprintf(buf, 512, L"%u", g_app.options.update_cooldown);
-    WritePrivateProfileStringW(S, L"UpdateCooldown", buf, path);
+    WritePrivateProfileStringW(S, L"UpdateCooldown", buf, auth_path);
 
     // UI preferences
     WritePrivateProfileStringW(S, L"MinimizeToTray",
-                               g_app.minimize_to_tray ? L"1" : L"0", path);
+                               g_app.minimize_to_tray ? L"1" : L"0", auth_path);
 
     swprintf(buf, 512, L"%d", (int)g_app.current_unit);
-    WritePrivateProfileStringW(S, L"DisplayUnit", buf, path);
+    WritePrivateProfileStringW(S, L"DisplayUnit", buf, auth_path);
 
     WritePrivateProfileStringW(S, L"SaveStickyProcesses",
-                               g_app.options.save_sticky_settings ? L"1" : L"0", path);
+                               g_app.options.save_sticky_settings ? L"1" : L"0", auth_path);
 
-    // Save-settings flag itself
-    // Always write this last so the file is coherent even if we crash midway
-    WritePrivateProfileStringW(S, L"SaveSettings", L"1", path);
+    // Custom folder paths (stored in auth_path too, so the file is self-contained)
+    WritePrivateProfileStringW(S, L"ConfigDir", g_app.options.config_dir, auth_path);
+    WritePrivateProfileStringW(S, L"SnapshotDir", g_app.options.snapshot_dir, auth_path);
+
+    // SaveSettings written last so the file is coherent even if we crash midway
+    WritePrivateProfileStringW(S, L"SaveSettings", L"1", auth_path);
 }
 
 // Settings_Load
 // Reads persisted fields into g_app.
+// Bootstrap note: config_dir itself is stored inside the config file.  We
+// first read from the default (exe-directory) path.  If ConfigDir is present
+// and resolves to a different folder we re-read from there so all other
+// settings come from the user-specified location.
 void Settings_Load(void) {
-    wchar_t path[MAX_PATH];
-    if (!Settings_GetPath(path, MAX_PATH)) return;
+    // Pass 1: read from exe-directory path to get ConfigDir
+    wchar_t default_path[MAX_PATH];
+    {
+        wchar_t exe_dir[MAX_PATH];
+        GetExeDir(exe_dir, MAX_PATH);
+        swprintf(default_path, MAX_PATH, L"%sBandwidthShaper.cfg", exe_dir);
+    }
 
     const wchar_t *S = L"Settings";
     wchar_t buf[1024];
+
+    // Read ConfigDir first (may be empty, meaning "use exe dir")
+    GetPrivateProfileStringW(S, L"ConfigDir", L"", buf, MAX_PATH, default_path);
+    wcsncpy(g_app.options.config_dir, buf, MAX_PATH - 1);
+    g_app.options.config_dir[MAX_PATH - 1] = L'\0';
+
+    // Also read SnapshotDir while we're here (same file)
+    GetPrivateProfileStringW(S, L"SnapshotDir", L"", buf, MAX_PATH, default_path);
+    wcsncpy(g_app.options.snapshot_dir, buf, MAX_PATH - 1);
+    g_app.options.snapshot_dir[MAX_PATH - 1] = L'\0';
+
+    // Pass 2: determine the authoritative config path
+    // If ConfigDir resolves to a different directory, the real config lives there.
+    wchar_t path[MAX_PATH];
+    if (!Settings_GetPath(path, MAX_PATH)) return;
+
+    // If the resolved path differs from the default one, re-read the dir
+    // fields from the new location (allows the relocated file to override).
+    if (_wcsicmp(path, default_path) != 0) {
+        GetPrivateProfileStringW(S, L"ConfigDir", L"", buf, MAX_PATH, path);
+        wcsncpy(g_app.options.config_dir, buf, MAX_PATH - 1);
+        g_app.options.config_dir[MAX_PATH - 1] = L'\0';
+
+        GetPrivateProfileStringW(S, L"SnapshotDir", L"", buf, MAX_PATH, path);
+        wcsncpy(g_app.options.snapshot_dir, buf, MAX_PATH - 1);
+        g_app.options.snapshot_dir[MAX_PATH - 1] = L'\0';
+    }
 
     // Has to happen before SaveSettings
     GetPrivateProfileStringW(S, L"SaveStickyProcesses", L"0", buf, 2, path);
@@ -2290,6 +2558,22 @@ LRESULT onClose(HWND hWnd) {
     TrayRemove();
     Sticky_Save();
     Settings_Save();
+    // Failsafe: if the config file ended up empty (e.g. a partially
+    // completed write that left a zero-byte file), delete it now.
+    {
+        wchar_t cfg_path[MAX_PATH];
+        if (Settings_GetPath(cfg_path, MAX_PATH)) {
+            HANDLE hf = CreateFileW(cfg_path, GENERIC_READ, FILE_SHARE_READ,
+                                    NULL, OPEN_EXISTING, 0, NULL);
+            if (hf != INVALID_HANDLE_VALUE) {
+                LARGE_INTEGER sz = {0};
+                GetFileSizeEx(hf, &sz);
+                CloseHandle(hf);
+                if (sz.QuadPart == 0)
+                    DeleteFileW(cfg_path);
+            }
+        }
+    }
     if (g_app.hStatsWnd) {
         DestroyWindow(g_app.hStatsWnd);
         g_app.hStatsWnd = NULL;

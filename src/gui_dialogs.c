@@ -10,6 +10,7 @@
 #include "schedule.h"
 #include <richedit.h>
 #include <commdlg.h>
+#include <shlobj.h>
 
 // Stats dialog context
 typedef struct {
@@ -97,6 +98,10 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
         // Save sticky settings to config file
         CheckDlgButton(hDlg, IDC_OPT_SAVE_STICKY_SETTINGS,
                       g_app.options.save_sticky_settings ? BST_CHECKED : BST_UNCHECKED);
+
+        // File path fields
+        SetDlgItemTextW(hDlg, IDC_OPT_CONFIG_DIR,   g_app.options.config_dir);
+        SetDlgItemTextW(hDlg, IDC_OPT_SNAPSHOT_DIR, g_app.options.snapshot_dir);
 
         // Apply dark mode to this dialog if enabled
         if (g_app.dark_mode) {
@@ -228,7 +233,13 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
                 { IDC_OPT_SAVE_STICKY_SETTINGS,
                   L"Save the sticky process list (pinned processes and their limits)\n"
                   L"to BandwidthShaper.cfg on exit, and restore them on next launch.\n"
-                  L"Does not require 'Remember settings on exit' to also be checked." },
+                  L"Does require 'Remember settings on exit' to also be checked." },
+                { IDC_OPT_CONFIG_DIR,
+                  L"Save the config file to this location when the program exits,\n"
+                  L"and reload them using that path next launch." },
+                { IDC_OPT_SNAPSHOT_DIR,
+                  L"Save the snapshots from statistics to this location,\n"
+                  L"instead of the same directory as the EXE file itself." },
             };
 
             // Store tooltip handle in dialog user data
@@ -343,6 +354,23 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case IDOK: {
+            // Read file path fields first so every subsequent Settings_GetPath
+            // call (including inside save_sticky_settings and Settings_Save)
+            // already uses the paths the user just typed/selected.
+            GetDlgItemTextW(hDlg, IDC_OPT_CONFIG_DIR,
+                            g_app.options.config_dir, MAX_PATH);
+            GetDlgItemTextW(hDlg, IDC_OPT_SNAPSHOT_DIR,
+                            g_app.options.snapshot_dir, MAX_PATH);
+            // Trim trailing whitespace from both paths
+            for (int _i = (int)wcslen(g_app.options.config_dir) - 1;
+                 _i >= 0 && (g_app.options.config_dir[_i] == L' ' ||
+                             g_app.options.config_dir[_i] == L'\t'); _i--)
+                g_app.options.config_dir[_i] = L'\0';
+            for (int _i = (int)wcslen(g_app.options.snapshot_dir) - 1;
+                 _i >= 0 && (g_app.options.snapshot_dir[_i] == L' ' ||
+                             g_app.options.snapshot_dir[_i] == L'\t'); _i--)
+                g_app.options.snapshot_dir[_i] = L'\0';
+
             // Read values from controls
             g_app.options.dl_buffer = GetDlgItemInt(hDlg, IDC_OPT_DL_BUFFER, NULL, FALSE);
             g_app.options.ul_buffer = GetDlgItemInt(hDlg, IDC_OPT_UL_BUFFER, NULL, FALSE);
@@ -377,27 +405,15 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
             // Remove StickyProcesses part from config if unset
             g_app.options.save_sticky_settings =
                 IsDlgButtonChecked(hDlg, IDC_OPT_SAVE_STICKY_SETTINGS) == BST_CHECKED;
-            if (g_app.options.save_sticky_settings) {
-                wchar_t cfg_path[MAX_PATH];
-                if (Settings_GetPath(cfg_path, MAX_PATH))
-                    WritePrivateProfileStringW(L"Settings", L"SaveStickyProcesses", L"1", cfg_path);
-            } else {
-                wchar_t cfg_path[MAX_PATH];
-                if (Settings_GetPath(cfg_path, MAX_PATH))
-                    WritePrivateProfileStringW(L"Settings", L"SaveStickyProcesses", L"0", cfg_path);
-			}
             Sticky_Save();
 
             g_app.options.save_settings =
                 IsDlgButtonChecked(hDlg, IDC_OPT_SAVE_SETTINGS) == BST_CHECKED;
-			// If the user just turned saving off, clear the file's flag so it
-			// won't be loaded next time either
-            if (!g_app.options.save_settings) {
-                wchar_t cfg_path[MAX_PATH];
-                if (Settings_GetPath(cfg_path, MAX_PATH))
-                    WritePrivateProfileStringW(L"Settings", L"SaveSettings", L"0", cfg_path);
-            }
-            if (g_app.options.save_settings) Settings_Save();
+
+            // Settings_Save handles all cases: full save when save_settings
+            // is on, redirect-only when a custom dir is set but save_settings
+            // is off, and cleanup (DeleteFile) when neither applies.
+            Settings_Save();
 
             // Get selected NICs
             HWND hList = GetDlgItem(hDlg, IDC_OPT_NIC_LIST);
@@ -439,6 +455,52 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
         case IDCANCEL:
             EndDialog(hDlg, IDCANCEL);
             return TRUE;
+
+        case IDC_OPT_CONFIG_DIR_BROWSE:
+        case IDC_OPT_SNAPSHOT_DIR_BROWSE: {
+            // Pop up a folder-picker dialog
+            bool is_config = (LOWORD(wParam) == IDC_OPT_CONFIG_DIR_BROWSE);
+            int edit_id = is_config ? IDC_OPT_CONFIG_DIR : IDC_OPT_SNAPSHOT_DIR;
+
+            // Read current text as starting folder
+            wchar_t start[MAX_PATH] = {0};
+            GetDlgItemTextW(hDlg, edit_id, start, MAX_PATH);
+
+            // Use SHBrowseForFolderW (available on all supported Windows versions)
+            BROWSEINFOW bi = {0};
+            bi.hwndOwner = hDlg;
+            bi.lpszTitle = is_config
+                           ? L"Select folder for the config file (BandwidthShaper.cfg):"
+                           : L"Select folder for CSV snapshot exports:";
+            bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+            // Pre-select the folder currently shown in the edit box
+            if (start[0] != L'\0') {
+                bi.lParam = (LPARAM)start;
+                bi.lpfn = NULL;  // no callback needed for pre-selection via pidl below
+            }
+
+            // Convert the starting path to a PIDL so SHBrowseForFolder can
+            // pre-select it (only if the path actually exists right now)
+            LPITEMIDLIST pidl_start = NULL;
+            if (start[0] != L'\0') {
+                SFGAOF sfgao = 0;
+                SHParseDisplayName(start, NULL, &pidl_start, 0, &sfgao);
+                if (pidl_start) bi.pidlRoot = NULL;  // use absolute pidl via pszDisplayName trick
+                // Actually pass via lParam + callback for pre-selection
+                // Simpler: just set pszDisplayName; Windows will try to expand it
+                if (pidl_start) { CoTaskMemFree(pidl_start); pidl_start = NULL; }
+            }
+
+            LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
+            if (pidl) {
+                wchar_t chosen[MAX_PATH];
+                if (SHGetPathFromIDListW(pidl, chosen)) {
+                    SetDlgItemTextW(hDlg, edit_id, chosen);
+                }
+                CoTaskMemFree(pidl);
+            }
+            return TRUE;
+        }
         }
         break;
     }
@@ -1799,20 +1861,28 @@ LRESULT CALLBACK ChartWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam,
 // Writes per-process traffic table + summary to a timestamped CSV file
 // next to the executable.  Returns true on success.
 bool SaveStatisticsToCSV(HWND hParent) {
-    // Build output path: <exe dir>\BandwidthShaper_YYYYMMDD_HHMM.csv
-    wchar_t exe_dir[MAX_PATH];
-    if (!GetModuleFileNameW(NULL, exe_dir, MAX_PATH)) return false;
-    wchar_t *last_sep = wcsrchr(exe_dir, L'\\');
-    if (!last_sep) last_sep = wcsrchr(exe_dir, L'/');
-    if (last_sep) *(last_sep + 1) = L'\0';
-    else exe_dir[0] = L'\0';
+    // Build output path: <snapshot_dir>\BandwidthShaper_YYYYMMDD_HHMM.csv
+    // snapshot_dir is resolved (with fallback to exe dir) by ResolveOrFallbackDir
+    // inside Settings_GetSnapshotDir, called here directly.
+    extern bool ResolveOrFallbackDir(const wchar_t*, wchar_t*, DWORD);
+    wchar_t snap_dir[MAX_PATH];
+    if (!ResolveOrFallbackDir(g_app.options.snapshot_dir, snap_dir, MAX_PATH)
+            || snap_dir[0] == L'\0') {
+        // Fallback: exe directory (ResolveOrFallbackDir already filled snap_dir)
+        if (snap_dir[0] == L'\0') {
+            if (!GetModuleFileNameW(NULL, snap_dir, MAX_PATH)) return false;
+            wchar_t *sep = wcsrchr(snap_dir, L'\\');
+            if (!sep) sep = wcsrchr(snap_dir, L'/');
+            if (sep) *(sep + 1) = L'\0'; else snap_dir[0] = L'\0';
+        }
+    }
 
     SYSTEMTIME st;
     GetLocalTime(&st);
     wchar_t filename[MAX_PATH];
     swprintf(filename, MAX_PATH,
              L"%sBandwidthShaper_%04u%02u%02u_%02u%02u.csv",
-             exe_dir,
+             snap_dir,
              st.wYear, st.wMonth, st.wDay,
              st.wHour, st.wMinute);
 

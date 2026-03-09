@@ -64,6 +64,8 @@ typedef struct AppState {
         wchar_t selected_nics[256];
         bool save_settings;
         bool save_sticky_settings;
+        wchar_t config_dir[MAX_PATH];
+        wchar_t snapshot_dir[MAX_PATH];
     } options;
 
     // DPI awareness

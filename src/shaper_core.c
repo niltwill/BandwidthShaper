@@ -24,6 +24,8 @@
 //   RULE_FLAG_QUOTA_IN_EXHAUSTED / RULE_FLAG_QUOTA_OUT_EXHAUSTED - Quotas reached
 //   RULE_FLAG_NEEDS_REFRESH - PID map needs refresh (name-based rules only)
 //   RULE_FLAG_DL_EXPLICITLY_BLOCKED / RULE_FLAG_UL_EXPLICITLY_BLOCKED - Direction was explicitly blocked at creation
+//   RULE_FLAG_HAS_SCHEDULE - The rule has a schedule
+//   RULE_FLAG_SCHEDULE_ACTIVE - The rule has a currently active schedule
 
 #include "common.h"
 #include "shaper_core.h"
