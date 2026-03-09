@@ -15,7 +15,7 @@ You may ask: why would you ever need to use bandwidth throttling, anyway? Well, 
 Consider the following scenarios:
 
 * **Data caps / metered connections:** Mobile hotspots, capped home plans, or roaming where you don't want one background sync (OneDrive, Steam updates, Windows Update, etc.) to burn through your monthly allowance. Per-process quotas (e.g., "Chrome gets 500MB/day download quota") prevent surprises.
-* **Scheduling**: You can run heavy downloads/uploads only during off-peak hours (cheaper electricity, less interference with work/gaming/family streaming). Or restrict weekdays vs. weekends as reuqired.
+* **Scheduling**: You can run heavy downloads/uploads only during off-peak hours (cheaper electricity, less interference with work/gaming/family streaming). Or restrict weekdays vs. weekends as required.
 * **Per-process granularity:** Not just stick to global caps, but decide which app gets how much DL and UL max, while others run unrestricted. Crucial when one process (torrent client, game patcher, video encoder) hogs the pipe (and it has no speed limit option).
 * **Asymmetric connections (ADSL/VDSL/cable):** Upload saturation is brutal here: even a modest 5–10 Mbps upload (think of a YouTube 1080p stream, a large file backup, or cloud sync) can spike latency to 500–1000ms+ because the ACK packets for downloads get queued behind uploads. This means that browsing feels like dial-up (pages timeout, media content buffers forever). Throttling upload to ~80–90% of line rate leaves headroom for interactive traffic. Same for heavy downloads overwhelming buffers on the ISP side.
 
