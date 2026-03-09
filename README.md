@@ -17,7 +17,7 @@ Consider the following scenarios:
 * **Data caps / metered connections:** Mobile hotspots, capped home plans, or roaming where you don't want one background sync (OneDrive, Steam updates, Windows Update, etc.) to burn through your monthly allowance. Per-process quotas (e.g., "Chrome gets 500MB/day download quota") prevent surprises.
 * **Scheduling**: You can run heavy downloads/uploads only during off-peak hours (cheaper electricity, less interference with work/gaming/family streaming). Or restrict weekdays vs. weekends as required.
 * **Per-process granularity:** Not just stick to global caps, but decide which app gets how much DL and UL max, while others run unrestricted. Crucial when one process (torrent client, game patcher, video encoder) hogs the pipe (and it has no speed limit option).
-* **Asymmetric connections (ADSL/VDSL/cable):** Upload saturation is brutal here: even a modest 5–10 Mbps upload (think of a YouTube 1080p stream, a large file backup, or cloud sync) can spike latency to 500–1000ms+ because the ACK packets for downloads get queued behind uploads. This means that browsing feels like dial-up (pages timeout, media content buffers forever). Throttling upload to ~80–90% of line rate leaves headroom for interactive traffic. Same for heavy downloads overwhelming buffers on the ISP side.
+* **Asymmetric connections (ADSL/VDSL/cable):** Upload saturation is brutal here, even a modest 5-10 Mbps upload (think of a YouTube 1080p stream, a large file backup, or cloud sync) can spike latency to 500-1000ms+ because the ACK packets for downloads get queued behind uploads. This means that browsing feels like dial-up (pages timeout, media content buffers forever). Throttling upload to ~80-90% of line rate leaves headroom for interactive traffic. Same for heavy downloads overwhelming buffers on the ISP side.
 
 These are common use cases for many on non-gigabit links or capped plans.
 
@@ -43,7 +43,7 @@ There's also a feature called "sticky processes". These remain in the list even 
 
 ### CLI version
 
-The CLI version has the following optoins available:
+The CLI version has the following options available:
 
 ```
 Usage: BandwidthShaper [OPTIONS]
@@ -160,7 +160,7 @@ process = notepad.exe,calc.exe
 schedule = 1800-2200~1-5     ; Only applies to Notepad and Calculator, evenings
 
 # This schedule would apply to any previously defined rule that doesn't have its own
-schedule = 0000-2359~1-7      ; Global fallback schedule
+schedule = 0000-2359~1-7     ; Global fallback schedule
 ```
 
 There has to be a --rule, --stop-at, --process, or --pid before the --schedule. If yes, it applies the schedule to that specific rule. If not, it becomes a global schedule that applies to all throttled traffic. So you have to remember, that the order matters here: the schedule must come after the process/rule it applies to, not before. Each process target can have its own unique schedule. If a schedule appears before any process targets, it applies to all throttled traffic.
