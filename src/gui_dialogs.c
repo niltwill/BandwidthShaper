@@ -519,7 +519,7 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
         // Allocate and initialize context
         ctx = calloc(1, sizeof(StatsDialogContext));
         if (ctx) {
-            ctx->initialized = FALSE;
+            ctx->initialized = FALSE; 
             SetWindowLongPtr(hDlg, GWLP_USERDATA, (LONG_PTR)ctx);
         }
 
@@ -555,8 +555,8 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
             };
             for (int i = 0; i < 3; i++) {
                 lvc.iSubItem = i;
-                lvc.pszText  = (LPWSTR)pcols[i].text;
-                lvc.cx       = pcols[i].width;
+                lvc.pszText = (LPWSTR)pcols[i].text;
+                lvc.cx = pcols[i].width;
                 ListView_InsertColumn(hProcList, i, &lvc);
             }
 
@@ -1235,12 +1235,7 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_CLOSE:
         // Ensure cleanup even if closed via X button
-        HWND hTip = (HWND)GetWindowLongPtr(hDlg, GWLP_USERDATA);
-        if (hTip && IsWindow(hTip)) {
-            DestroyWindow(hTip);
-        }
-        SetWindowLongPtr(hDlg, GWLP_USERDATA, 0);
-        EndDialog(hDlg, IDCANCEL);
+        DestroyWindow(hDlg);
         return TRUE;
     }
 
