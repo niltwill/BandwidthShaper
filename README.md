@@ -37,9 +37,9 @@ The GUI app should be pretty self-explanatory and easy to use, but here's a litt
 * Click **Start** to begin throttling
 * Monitor traffic in the process list
 * Double-click any cell to set limits, quotas, or schedules
-* Right-click processes for advanced options
+* Right-click processes for available options
 
-There's also a feature called "sticky processes". These remain in the list even when not running, which can be useful for persistent rules (e.g., always limit browser traffic).
+There's also a feature called "sticky processes". These remain in the list even when not running, which can be useful for persistent rules (e.g., always limit a browser's traffic).
 
 ### CLI version
 
@@ -59,12 +59,13 @@ Options:
                                                   Days: 1=Mon..7=Sun; ranges (1-5) and lists (1,3,5) OK
                                                   Examples: 0800-1800~1-5  2200-0600~6,7
   -Q, --quota-check-interval <ms>               How often to check quotas/schedules (default: 15000ms)
+  -I, --stats-interval <ms>                     How often to print statistics (default: 5000ms, requires -s)
   -i, --process-update-interval <NUM>[p|t][,c]  Packet/time threshold for PID refresh + optional cooldown
   -a, --disable-after <RATE>[KB|MB|GB]          Disable internet after reaching data cap (0 = no cap)
   -d, --download <RATE>[b|Kb|KB|Mb|MB|Gb|GB]    Download speed limit per second (default unit: KB)
-  -u, --upload   <RATE>[b|Kb|KB|Mb|MB|Gb|GB]    Upload speed limit per second (default unit: KB)
+  -u, --upload <RATE>[b|Kb|KB|Mb|MB|Gb|GB]      Upload speed limit per second (default unit: KB)
   -D, --download-buffer <bytes>                 Max download buffer size in bytes (default: 150000)
-  -U, --upload-buffer   <bytes>                 Max upload buffer size in bytes (default: 150000)
+  -U, --upload-buffer <bytes>                   Max upload buffer size in bytes (default: 150000)
   -t, --tcp-limit <NUM>                         Max active TCP connections (0 = unlimited)
   -r, --udp-limit <NUM>                         Max UDP packets/sec (0 = unlimited)
   -b, --burst <RATE>[b|Kb|KB|Mb|MB|Gb|GB]       Burst size override (0 = use buffer size)
@@ -115,29 +116,29 @@ BandwidthShaper.exe -n 15 -c "steam.exe 2MB 1MB" -T 2200-0600~6,7
 BandwidthShaper.exe -n 14:2MB:1MB,15:1MB:500KB
 
 # Block uploads for chrome.exe
-BandwidthShaper.exe -c "chrome.exe 1MB -1"
+BandwidthShaper.exe -n <your index> -c "chrome.exe 1MB -1"
 
 # Update every 1000 packets
-BandwidthShaper.exe -p chrome.exe -i 1000p
+BandwidthShaper.exe -n <your index> -p chrome.exe -i 1000p
 
 # Update every 5 seconds
-BandwidthShaper.exe -p chrome.exe -i 5000t
+BandwidthShaper.exe -n <your index> -p chrome.exe -i 5000t
 ```
 
 Schedules can be applied to specific processes in two ways. One is to use command-line arguments, where the schedule applies to the immediately preceding process target:
 
 ```
 # Apply schedule to a specific process rule
-bandwidthshaper.exe -c "chrome.exe 5MB 2MB" -T "0800-1800~1-5"
+BandwidthShaper.exe -n <your index> -c "chrome.exe 5MB 2MB" -T "0800-1800~1-5"
 
 # Apply schedule to a stop-at quota rule
-bandwidthshaper.exe -S "firefox.exe 1GB 500MB" -T "2200-0600~6,7"
+BandwidthShaper.exe -n <your index> -S "firefox.exe 1GB 500MB" -T "2200-0600~6,7"
 
 # Apply schedule to a process list
-bandwidthshaper.exe -p "chrome.exe,firefox.exe" -T "0900-1700~1-5"
+BandwidthShaper.exe -n <your index> -p "chrome.exe,firefox.exe" -T "0900-1700~1-5"
 
 # Apply schedule to specific PIDs
-bandwidthshaper.exe -z 1234,5678 -T "1800-2200~1-5"
+BandwidthShaper.exe -n <your index> -z 1234,5678 -T "1800-2200~1-5"
 ```
 
 The second method is using the configuration file, in this case, schedules are applied to the most recently defined rule:
@@ -195,3 +196,19 @@ sc query WinDivert
 Why was this made? The reason being is that most apps that serve this purpose can be rather complex (with many extra features) and they are usually commercial in Windows, such as [NetLimiter](https://www.netlimiter.com), [NetBalancer](https://netbalancer.com) or [SoftPerfect Bandwidth Manager](https://www.softperfect.com/products/bandwidth). At best, you can use [TMeter](http://www.tmeter.ru/en) as a free option. None of these were really appealing to me for simple bandwidth throttling (and I had no other extra need!). Now, if you ever had to use an ADSL/VDSL connection, you will know how much the upload saturation sucks, even with a smaller file. Downloading a larger file can also lead to network saturation. When this happens, browsing a website simply becomes a nightmare, as if you had a very poor connection.
 
 **Note:** It should go without saying, but this tool is not meant to limit the bandwidth of other computers in a network. Most likely your computer does not act as a router (gateway machine), so you will not be able to see the traffic of other users in a typical home, office or work environment. Assuming you're in a sys admin role, you're much better off using a router or firewall with pfSense or similar that has traffic shaping support or QoS, or running a transparent proxy like Squid. This small tool is for very simple use cases only. Always choose the right tool for the required job.
+
+## What about Feature X or Y?
+
+This app was intended to be a *simple, free replacement* for software like NetLimiter. If someone needs other advanced features, they can use those commercial applications instead. I'm personally not going to add (overly) complex features here. More code means more potential for bugs and harder maintenance. I aim to avoid the classic scope screep that many solo devs can fall into with unchecked ambition - so each feature is carefully considered before implementation.
+
+If you take a look in the open-source and free software space, a lot of apps may only implement the most practical features (or a subset of the most used ones), and leave the rest to the paid alternatives, where the devs get paid to implement those and have the incentive to keep polishing it for the (usually enterprise) users who request it. Those devs may make their living from that singular software or other software projects - so of course they are incentivized to improve upon them. For me, there are other things to do in my life than to solely polish this for years/decades to come. It's made on the side in my free time, no strings attached.
+
+While it's easy to look at NetLimiter's feature list and feel like a need to match it, but that's a product that's been commercially developed for years with paying customers funding each addition. This is not a competition for market share - commercial software may have to compete with each other, while I don't. I made mine in weeks for my personal needs, which then got slowly iterated and polished over months. Indeed, this was made to satisfy the core usage of a bandwidth shaper first and foremost: to see what's using your bandwidth, put a cap on it, set it and forget it. That's what 95% of people actually need. The remaining 5% who need per-user limits, deep packet inspection, protocol-level filtering, more advanced statistics or enterprise policy management have both the budget and the justification to pay for a commercial tool. This also creates a nice segregation in our usage model: use the commercial apps for the greater requirements, and this free app for the simple use cases.
+
+### Features that will not be included
+
+There were two potential features that got scrapped right at the planning phase, so don't request these:
+
+**1.** A service implementation for Windows. For users who want to make this a service, there's already a nifty tool for that called [Servy](https://github.com/aelassas/servy). While in some cases, it could make sense to have to apply bandwidth throttling constantly, but not everyone needs that. I personally wouldn't want to increase the complexity by having to maintain Windows service-related code (service handlers, SCM interaction, Session 0 isolation). Servy, NSSM, and similar tools exist so application developers don't have to solve that complex problem (with all that it entails). A user who needs it as a service is probably technical enough to use one of those tools (or their own scripts/workarounds).
+
+**2.** Bandwidth usage limitation *per user*. Since only one user is logged in at a time usually, this addition does not make much sense. This shaper operates at the network driver level, filtering by PID. To throttle by user, it'd need to enumerate which PIDs belong to which user, then group those PIDs under a user-level rule. That enumeration would need to happen continuously, since PIDs come and go, and this is already doing per-process tracking. All things considered, this wouldn't give us many benefits, and it'd be merely an aggregation layer on top of what already exists. The (special) username adds an indirection, and you'd still end up throttling the same processes, just discovered in a different way. The per-process view already gives us everything meaningful that per-user would give. The SYSTEM user angle sounds appealing, but it would be frustratingly coarse in practice, since we could be throttling dozens of unrelated system services alongside the one we want (a single svchost.exe PID hosts multiple services). For Windows Update specifically, you can use the Delivery Optimization settings.
