@@ -21,11 +21,11 @@
 // All other flags control runtime behavior:
 //   RULE_FLAG_DL_BLOCKED / RULE_FLAG_UL_BLOCKED - Direction is completely blocked
 //   RULE_FLAG_HAS_QUOTA_IN / RULE_FLAG_HAS_QUOTA_OUT - Quotas are configured
-//   RULE_FLAG_QUOTA_IN_EXHAUSTED / RULE_FLAG_QUOTA_OUT_EXHAUSTED - Quotas reached
 //   RULE_FLAG_NEEDS_REFRESH - PID map needs refresh (name-based rules only)
 //   RULE_FLAG_DL_EXPLICITLY_BLOCKED / RULE_FLAG_UL_EXPLICITLY_BLOCKED - Direction was explicitly blocked at creation
 //   RULE_FLAG_HAS_SCHEDULE - The rule has a schedule
 //   RULE_FLAG_SCHEDULE_ACTIVE - The rule has a currently active schedule
+//   RULE_FLAG_PENDING_FREE - The rule is queued for deletion
 
 #include "common.h"
 #include "shaper_core.h"
@@ -80,6 +80,7 @@ struct ShaperInstance {
 
     // per-process rules (uthash map)
     ProcessRule *rules;
+    ProcessRule *pending_free_rules;
     int rule_count;
     unsigned int rule_refresh_packet_counter;
     clock_t rule_refresh_last_time;
@@ -168,6 +169,8 @@ struct ShaperInstance {
     bool lock_initialized;
     CRITICAL_SECTION rule_update_lock;
     bool rule_update_lock_initialized;
+    CRITICAL_SECTION process_filter_lock;
+    bool process_filter_lock_initialized;
 
     // error buffer
     char error_buf[512];
@@ -513,6 +516,26 @@ bool shaper_add_process_rule(ShaperInstance *shaper,
     }
 
     r->burst = shaper->burst_size;
+
+    // Allocate and initialize per-NIC token buckets (required for rate limiting)
+    if (shaper->params.nic_count > 0) {
+        r->dl_buckets = calloc(shaper->params.nic_count, sizeof(TokenBucket));
+        r->ul_buckets = calloc(shaper->params.nic_count, sizeof(TokenBucket));
+        if (!r->dl_buckets || !r->ul_buckets) {
+            set_error(shaper, "OOM: failed to allocate rule buckets");
+            free(r->dl_buckets); free(r->ul_buckets); free(r);
+            return false;
+        }
+
+        int burst = r->burst > 0 ? r->burst
+                                 : (shaper->burst_size > 0 ? shaper->burst_size : 150000);
+        for (int i = 0; i < shaper->params.nic_count; i++) {
+            token_bucket_init(&r->dl_buckets[i], dl_rate, burst);
+            token_bucket_init(&r->ul_buckets[i], ul_rate, burst);
+        }
+        r->bucket_nic_count = (int)shaper->params.nic_count;
+    }
+
     HASH_ADD_KEYPTR(hh, shaper->rules, r->name, strlen(r->name), r);
     shaper->rule_count++;
 
@@ -562,12 +585,12 @@ void shaper_clear_process_rules(ShaperInstance *shaper) {
         HASH_DEL(shaper->rules, r);
         free_pid_map_pool(r->pids, &g_pid_pool);
         if (r->dl_buckets) {
-            for (int i = 0; i < shaper->params.nic_count; i++)
+            for (int i = 0; i < r->bucket_nic_count; i++)
                 token_bucket_destroy(&r->dl_buckets[i]);
             free(r->dl_buckets);
         }
         if (r->ul_buckets) {
-            for (int i = 0; i < shaper->params.nic_count; i++)
+            for (int i = 0; i < r->bucket_nic_count; i++)
                 token_bucket_destroy(&r->ul_buckets[i]);
             free(r->ul_buckets);
         }
@@ -636,10 +659,25 @@ static bool init_global_buckets(ShaperInstance *s) {
     return true;
 }
 
-// Allocate per-NIC buckets for all rules, resolve name→PID if needed.
+// Allocate per-NIC buckets for all rules, resolve name -> PID if needed.
 static bool init_rule_buckets(ShaperInstance *s) {
     ProcessRule *r, *tmp;
     HASH_ITER(hh, s->rules, r, tmp) {
+        // Tear down any existing buckets (nic_count may have changed during reload)
+        if (r->dl_buckets) {
+            for (int i = 0; i < r->bucket_nic_count; i++)
+                token_bucket_destroy(&r->dl_buckets[i]);
+            free(r->dl_buckets);
+            r->dl_buckets = NULL;
+        }
+        if (r->ul_buckets) {
+            for (int i = 0; i < r->bucket_nic_count; i++)
+                token_bucket_destroy(&r->ul_buckets[i]);
+            free(r->ul_buckets);
+            r->ul_buckets = NULL;
+        }
+        r->bucket_nic_count = (int)s->params.nic_count;
+
         // Only allocate buckets for directions that are NOT blocked
         if (!(r->flags & RULE_FLAG_DL_BLOCKED)) {
             r->dl_buckets = calloc(s->params.nic_count, sizeof(TokenBucket));
@@ -870,8 +908,18 @@ ShaperInstance *shaper_create(void) {
     }
     s->rule_update_lock_initialized = true;
 
+    // Initialize process filter lock
+    if (!InitializeCriticalSectionAndSpinCount(&s->process_filter_lock, 4000)) {
+        DeleteCriticalSection(&s->rule_update_lock);
+        free(s);
+        return NULL;
+    }
+    s->process_filter_lock_initialized = true;
+
     // Initialize batch stats
     if (!InitializeCriticalSectionAndSpinCount(&s->batch_stats.flush_lock, 4000)) {
+        DeleteCriticalSection(&s->rule_update_lock);
+        DeleteCriticalSection(&s->process_filter_lock);
         free(s);
         return NULL;
     }
@@ -880,6 +928,8 @@ ShaperInstance *shaper_create(void) {
 
     // Initialize flat rules
     if (!InitializeCriticalSectionAndSpinCount(&s->flat_rules.lock, 4000)) {
+        DeleteCriticalSection(&s->rule_update_lock);
+        DeleteCriticalSection(&s->process_filter_lock);
         DeleteCriticalSection(&s->batch_stats.flush_lock);
         free(s);
         return NULL;
@@ -889,6 +939,8 @@ ShaperInstance *shaper_create(void) {
     // Initialize reverse index
     if (!InitializeCriticalSectionAndSpinCount(&s->reverse_index.lock, 4000)) {
         // Clean up existing locks
+        DeleteCriticalSection(&s->rule_update_lock);
+        DeleteCriticalSection(&s->process_filter_lock);
         DeleteCriticalSection(&s->flat_rules.lock);
         DeleteCriticalSection(&s->batch_stats.flush_lock);
         free(s);
@@ -902,6 +954,8 @@ ShaperInstance *shaper_create(void) {
         s->pid_traffic_shards[i] = NULL;
         if (!InitializeCriticalSectionAndSpinCount(&s->pid_traffic_locks[i], 4000)) {
             // Clean up already initialized locks
+            DeleteCriticalSection(&s->rule_update_lock);
+            DeleteCriticalSection(&s->process_filter_lock);
             DeleteCriticalSection(&s->flat_rules.lock);
             DeleteCriticalSection(&s->batch_stats.flush_lock);
             for (int j = 0; j < i; j++) {
@@ -922,6 +976,7 @@ void shaper_destroy(ShaperInstance *shaper) {
     if (shaper->batch_stats.initialized) DeleteCriticalSection(&shaper->batch_stats.flush_lock);
     if (shaper->lock_initialized) DeleteCriticalSection(&shaper->global_lock);
     if (shaper->rule_update_lock_initialized) DeleteCriticalSection(&shaper->rule_update_lock);
+    if (shaper->process_filter_lock_initialized) DeleteCriticalSection(&shaper->process_filter_lock);
 
     // Clean up small rule sets
     if (shaper->flat_rules.initialized) {
@@ -972,25 +1027,12 @@ void shaper_destroy(ShaperInstance *shaper) {
 // -----------------------------------------------------------------------
 // shaper_start - internal worker thread
 // -----------------------------------------------------------------------
-bool shaper_start(ShaperInstance *shaper,
-                  const ThrottlingParams *params,
-                  const ProcessParams *processparams,
-                  double download_rate,
-                  double upload_rate,
-                  unsigned int download_buffer_size,
-                  unsigned int upload_buffer_size,
-                  unsigned int max_tcp_connections,
-                  unsigned int max_udp_packets_per_second,
-                  unsigned int latency_ms,
-                  float packet_loss,
-                  int priority,
-                  int burst_size,
-                  uint64_t data_cap_bytes,
-                  unsigned int quota_check_interval_ms,
-                  const Schedule *global_schedule,
-                  bool quiet_mode,
-                  bool enable_statistics) {
-    if (!shaper) return false;
+bool shaper_start(ShaperInstance *shaper, const ShaperConfig *config) {
+    if (!shaper || !config || !config->params) {
+        if (shaper) set_error(shaper, "Invalid configuration");
+        return false;
+    }
+
     if (shaper->is_running) { set_error(shaper, "Already running"); return false; }
 
     // Prevent restart if thread is still cleaning up
@@ -1000,27 +1042,29 @@ bool shaper_start(ShaperInstance *shaper,
     }
 
     // Snapshot config
-    if (!copy_throttling_params(shaper, params)) return false;
-    if (!copy_process_params(shaper, processparams)) return false;
+    if (!copy_throttling_params(shaper, config->params)) return false;
+    if (!copy_process_params(shaper, config->processparams)) return false;
 
-    shaper->download_rate = download_rate;
-    shaper->upload_rate = upload_rate;
-    shaper->download_buffer_size = download_buffer_size;
-    shaper->upload_buffer_size = upload_buffer_size;
-    shaper->max_tcp_connections = max_tcp_connections;
-    shaper->max_udp_packets_per_second = max_udp_packets_per_second;
-    shaper->latency_ms = latency_ms;
-    shaper->packet_loss = packet_loss;
-    shaper->priority = priority;
-    shaper->burst_size = burst_size;
-    shaper->data_cap_bytes = (LONGLONG)data_cap_bytes;
+    shaper->download_rate = config->download_rate;
+    shaper->upload_rate = config->upload_rate;
+    shaper->download_buffer_size = config->download_buffer_size;
+    shaper->upload_buffer_size = config->upload_buffer_size;
+    shaper->max_tcp_connections = config->max_tcp_connections;
+    shaper->max_udp_packets_per_second = config->max_udp_packets_per_second;
+    shaper->latency_ms = config->latency_ms;
+    shaper->packet_loss = config->packet_loss;
+    shaper->priority = config->priority;
+    shaper->burst_size = config->burst_size;
+    shaper->data_cap_bytes = (LONGLONG)config->data_cap_bytes;
     shaper->cap_reached = false;
     shaper->total_bytes_throttled = 0;
+    shaper->quiet_mode = config->quiet_mode;
+    shaper->enable_statistics = config->enable_statistics;
 
     // Store global schedule
-    if (global_schedule && !schedule_is_empty(global_schedule)) {
-        shaper->global_schedule = *global_schedule;
-        shaper->global_schedule_active = schedule_is_active_now(global_schedule);
+    if (config->global_schedule && !schedule_is_empty(config->global_schedule)) {
+        shaper->global_schedule = *config->global_schedule;
+        shaper->global_schedule_active = schedule_is_active_now(config->global_schedule);
     } else {
         schedule_init(&shaper->global_schedule);
         shaper->global_schedule_active = true;  // Always active if no schedule
@@ -1028,8 +1072,8 @@ bool shaper_start(ShaperInstance *shaper,
     shaper->last_global_schedule_check = time(NULL);
  
     // Store quota check interval
-    shaper->quota_check_interval_ms = quota_check_interval_ms > 0 ? 
-                                       quota_check_interval_ms : 15000;
+    shaper->quota_check_interval_ms = config->quota_check_interval_ms > 0 ? 
+                                       config->quota_check_interval_ms : QUOTA_CHECK_INTERVAL;
 
     // Performance counter
     LARGE_INTEGER freq;
@@ -1092,7 +1136,7 @@ bool shaper_start(ShaperInstance *shaper,
 
     // Open WinDivert
     shaper->windivert_handle = WinDivertOpen(
-        "tcp or udp", WINDIVERT_LAYER_NETWORK, priority, 0);
+        "tcp or udp", WINDIVERT_LAYER_NETWORK, shaper->priority, 0);
 
     if (shaper->windivert_handle == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
@@ -1222,43 +1266,38 @@ void shaper_stop(ShaperInstance *shaper) {
 // -----------------------------------------------------------------------
 // shaper_reload
 // -----------------------------------------------------------------------
-bool shaper_reload(ShaperInstance *shaper,
-                   const ThrottlingParams *params,
-                   const ProcessParams *processparams,
-                   double download_rate,
-                   double upload_rate,
-                   unsigned int download_buffer_size,
-                   unsigned int upload_buffer_size,
-                   unsigned int max_tcp_connections,
-                   unsigned int max_udp_packets_per_second,
-                   unsigned int latency_ms,
-                   float packet_loss,
-                   int priority,
-                   int burst_size,
-                   uint64_t data_cap_bytes,
-                   unsigned int quota_check_interval_ms,
-                   const Schedule *global_schedule,
-                   bool quiet_mode,
-                   bool enable_statistics) {
-    if (!shaper) return false;
+bool shaper_reload(ShaperInstance *shaper, const ShaperConfig *config) {
+    if (!shaper || !config) {
+        if (shaper) set_error(shaper, "Invalid configuration");
+        return false;
+    }
+
     if (!shaper->is_running) {
         set_error(shaper, "Cannot reload: not running");
         return false;
     }
     CORE_PRINTF(shaper, "\nReloading configuration (brief interruption)...\n");
 
-    // Close handle first to immediately unblock the worker
+    // Signal the worker to exit first
+    InterlockedExchange((LONG*)&shaper->should_stop, TRUE);
+
+    // Now close the handle to unblock WinDivertRecvEx
     HANDLE old_handle = (HANDLE)InterlockedExchangePointer(
         (void**)&shaper->windivert_handle, INVALID_HANDLE_VALUE);
     if (old_handle != INVALID_HANDLE_VALUE) {
         WinDivertClose(old_handle);
     }
 
-    // Signal stop and join worker
-    InterlockedExchange((LONG*)&shaper->should_stop, TRUE);
+    // Join the worker
     WaitForSingleObject(shaper->worker_thread, 2000);
     CloseHandle(shaper->worker_thread);
     shaper->worker_thread = NULL;
+
+    // Close the old event before creating a new one
+    if (shaper->recv_event) {
+        CloseHandle(shaper->recv_event);
+        shaper->recv_event = NULL;
+    }
 
     shaper->thread_state = SHAPER_THREAD_STOPPED;
     InterlockedExchange(&shaper->worker_active, 0);
@@ -1279,7 +1318,7 @@ bool shaper_reload(ShaperInstance *shaper,
 
     // Now tear down existing state
     destroy_global_buckets(shaper);
-    shaper_clear_process_rules(shaper);
+    //shaper_clear_process_rules(shaper); // shaper_reload() should only rebuild global state and reinit existing rule buckets
     cleanup_rate_limits(&shaper->processparams, &shaper->global_lock);
     free_pid_map_pool(shaper->processparams.pid_map, &g_pid_pool);
     shaper->processparams.pid_map = NULL;
@@ -1287,25 +1326,25 @@ bool shaper_reload(ShaperInstance *shaper,
     // Reset data-cap state
     shaper->cap_reached = false;
     shaper->total_bytes_throttled = 0;
-    shaper->data_cap_bytes = (LONGLONG)data_cap_bytes;
+    shaper->data_cap_bytes = (LONGLONG)config->data_cap_bytes;
 
     // Store new global schedule and quota interval
-    if (global_schedule && !schedule_is_empty(global_schedule)) {
-        shaper->global_schedule = *global_schedule;
-        shaper->global_schedule_active = schedule_is_active_now(global_schedule);
+    if (config->global_schedule && !schedule_is_empty(config->global_schedule)) {
+        shaper->global_schedule = *config->global_schedule;
+        shaper->global_schedule_active = schedule_is_active_now(config->global_schedule);
     } else {
         schedule_init(&shaper->global_schedule);
         shaper->global_schedule_active = true;  // Always active if no schedule
     }
     shaper->last_global_schedule_check = time(NULL);
-    
+
     // Store quota check interval (default to 15000ms if not specified)
-    shaper->quota_check_interval_ms = quota_check_interval_ms > 0 ? 
-                                       quota_check_interval_ms : 15000;
+    shaper->quota_check_interval_ms = config->quota_check_interval_ms > 0 ? 
+                                       config->quota_check_interval_ms : QUOTA_CHECK_INTERVAL;
 
     // Try to apply new config
-    bool copy_ok = copy_throttling_params(shaper, params) &&
-                   copy_process_params(shaper, processparams);
+    bool copy_ok = copy_throttling_params(shaper, config->params) &&
+                   copy_process_params(shaper, config->processparams);
 
     if (!copy_ok) {
         // Restore old state
@@ -1341,18 +1380,18 @@ bool shaper_reload(ShaperInstance *shaper,
     cleanup_throttling_params_safe(&old_params);
     cleanup_process_params_safe(&old_processparams);
 
-    shaper->download_rate = download_rate;
-    shaper->upload_rate = upload_rate;
-    shaper->download_buffer_size = download_buffer_size;
-    shaper->upload_buffer_size = upload_buffer_size;
-    shaper->max_tcp_connections = max_tcp_connections;
-    shaper->max_udp_packets_per_second = max_udp_packets_per_second;
-    shaper->latency_ms = latency_ms;
-    shaper->packet_loss = packet_loss;
-    shaper->priority = priority;
-    shaper->burst_size = burst_size;
-    shaper->quiet_mode = quiet_mode;
-    shaper->enable_statistics = enable_statistics;
+    shaper->download_rate = config->download_rate;
+    shaper->upload_rate = config->upload_rate;
+    shaper->download_buffer_size = config->download_buffer_size;
+    shaper->upload_buffer_size = config->upload_buffer_size;
+    shaper->max_tcp_connections = config->max_tcp_connections;
+    shaper->max_udp_packets_per_second = config->max_udp_packets_per_second;
+    shaper->latency_ms = config->latency_ms;
+    shaper->packet_loss = config->packet_loss;
+    shaper->priority = config->priority;
+    shaper->burst_size = config->burst_size;
+    shaper->quiet_mode = config->quiet_mode;
+    shaper->enable_statistics = config->enable_statistics;
 
     if (shaper->params.nic_count == 0) {
         set_error(shaper, "Reload error: no NICs specified");
@@ -1499,6 +1538,16 @@ static void shaper_packet_loop_internal(ShaperInstance *shaper) {
 
             if (shaper->should_stop) break;
 
+            // Drain pending-free list
+            EnterCriticalSection(&shaper->global_lock);
+            ProcessRule *pf, *pftmp;
+            HASH_ITER(hh, shaper->pending_free_rules, pf, pftmp) {
+                HASH_DEL(shaper->pending_free_rules, pf);
+                free_pid_map_pool(pf->pids, &g_pid_pool);
+                free(pf);
+            }
+            LeaveCriticalSection(&shaper->global_lock);
+
             // Process delayed packets periodically
             if (++delay_process_counter >= 10) {
                 delay_process_counter = 0;
@@ -1564,9 +1613,18 @@ static void shaper_packet_loop_internal(ShaperInstance *shaper) {
 
             // Global process filter
             if (shaper->processparams.process_list != NULL) {
-                update_pid_map(&shaper->processparams, &shaper->pid_cache);
-                if (shaper->processparams.pid_map != NULL && pid != 0 &&
-                    !is_pid_in_map(shaper->processparams.pid_map, pid)) {
+                // Increment packet counter for threshold tracking
+                if (shaper->processparams.packet_threshold > 0) {
+                    InterlockedIncrement(&shaper->processparams.packet_count);
+                }
+
+                // Read PID map safely
+                EnterCriticalSection(&shaper->process_filter_lock);
+                bool allowed = (shaper->processparams.pid_map == NULL || pid == 0 || 
+                                is_pid_in_map(shaper->processparams.pid_map, pid));
+                LeaveCriticalSection(&shaper->process_filter_lock);
+
+                if (!allowed) {
                     reinject_packet(handle, packet, packet_len, &addr, NULL);
                     packet_handled = true;
                     goto stats_update;
@@ -1700,18 +1758,6 @@ static void shaper_packet_loop_internal(ShaperInstance *shaper) {
                 if ((addr.Outbound && (match->flags & RULE_FLAG_UL_BLOCKED)) ||
                     (!addr.Outbound && (match->flags & RULE_FLAG_DL_BLOCKED))) {
                     // Blocked - drop packet immediately
-                    dropped_rate = true;
-                    packet_handled = true;
-                    goto stats_update;
-                }
-
-                // Check quotas
-                if (addr.Outbound && (match->flags & RULE_FLAG_QUOTA_OUT_EXHAUSTED)) {
-                    dropped_rate = true;
-                    packet_handled = true;
-                    goto stats_update;
-                }
-                if (!addr.Outbound && (match->flags & RULE_FLAG_QUOTA_IN_EXHAUSTED)) {
                     dropped_rate = true;
                     packet_handled = true;
                     goto stats_update;
@@ -2005,19 +2051,9 @@ bool shaper_remove_process_rule(ShaperInstance *shaper, const char *identifier) 
         }
         LeaveCriticalSection(&shaper->flat_rules.lock);
 
-        // Free resources
-        free_pid_map_pool(r->pids, &g_pid_pool);
-        if (r->dl_buckets) {
-            for (int i = 0; i < shaper->params.nic_count; i++)
-                token_bucket_destroy(&r->dl_buckets[i]);
-            free(r->dl_buckets);
-        }
-        if (r->ul_buckets) {
-            for (int i = 0; i < shaper->params.nic_count; i++)
-                token_bucket_destroy(&r->ul_buckets[i]);
-            free(r->ul_buckets);
-        }
-        free(r);
+        // Queue the removal for resources (buckets, PID map)
+        HASH_ADD_KEYPTR(hh, shaper->pending_free_rules, r->name, strlen(r->name), r);
+        r->flags |= RULE_FLAG_PENDING_FREE;
     }
     LeaveCriticalSection(&shaper->global_lock);
 
@@ -2045,18 +2081,14 @@ bool shaper_set_process_quota(ShaperInstance *shaper,
         // Update flags
         if (quota_in > 0) {
             r->flags |= RULE_FLAG_HAS_QUOTA_IN;
-            r->flags &= ~RULE_FLAG_QUOTA_IN_EXHAUSTED;  // Reset exhausted flag
         } else {
             r->flags &= ~RULE_FLAG_HAS_QUOTA_IN;
-            r->flags &= ~RULE_FLAG_QUOTA_IN_EXHAUSTED;
         }
 
         if (quota_out > 0) {
             r->flags |= RULE_FLAG_HAS_QUOTA_OUT;
-            r->flags &= ~RULE_FLAG_QUOTA_OUT_EXHAUSTED;
         } else {
             r->flags &= ~RULE_FLAG_HAS_QUOTA_OUT;
-            r->flags &= ~RULE_FLAG_QUOTA_OUT_EXHAUSTED;
         }
 
         // If quota-only (no rates), set blocked flags appropriately,
@@ -2076,9 +2108,7 @@ bool shaper_set_process_quota(ShaperInstance *shaper,
 bool shaper_get_process_quota(ShaperInstance *shaper,
                                const char *identifier,
                                uint64_t *quota_in,
-                               uint64_t *quota_out,
-                               bool *in_reached,
-                               bool *out_reached) {
+                               uint64_t *quota_out) {
     if (!shaper || !identifier) return false;
     if (!shaper->lock_initialized) return false;
 
@@ -2092,8 +2122,6 @@ bool shaper_get_process_quota(ShaperInstance *shaper,
     if (r) {
         if (quota_in) *quota_in = r->quota_in;
         if (quota_out) *quota_out = r->quota_out;
-        if (in_reached) *in_reached = (r->flags & RULE_FLAG_QUOTA_IN_EXHAUSTED) != 0;
-        if (out_reached) *out_reached = (r->flags & RULE_FLAG_QUOTA_OUT_EXHAUSTED) != 0;
     }
     LeaveCriticalSection(&shaper->global_lock);
 
@@ -2114,10 +2142,6 @@ bool shaper_reset_process_quota(ShaperInstance *shaper,
     HASH_FIND(hh, shaper->rules, norm_name, strlen(norm_name), r);
 
     if (r) {
-        // Reset exhausted flags
-        r->flags &= ~RULE_FLAG_QUOTA_IN_EXHAUSTED;
-        r->flags &= ~RULE_FLAG_QUOTA_OUT_EXHAUSTED;
-
         // Restore blocked state based on:
         // 1. Original explicit block flags (preserved from creation)
         // 2. Or quota-only rules (rate=0 with quota)
@@ -2285,6 +2309,13 @@ bool shaper_get_process_pids(ShaperInstance *shaper,
     return true;  // Rule found, even if 0 PIDs
 }
 
+void shaper_update_process_pids(ShaperInstance *shaper) {
+    if (!shaper || !shaper->is_running || !shaper->processparams.process_list) return;
+    EnterCriticalSection(&shaper->process_filter_lock);
+    update_pid_map(&shaper->processparams, &shaper->pid_cache);
+    LeaveCriticalSection(&shaper->process_filter_lock);
+}
+
 // -----------------------------------------------------------------------
 // Cleanup function for stale PID entries
 void shaper_cleanup_pid_traffic(ShaperInstance *shaper, int interval_seconds, int max_age_seconds) {
@@ -2371,6 +2402,54 @@ void shaper_reset_pid_traffic(ShaperInstance *shaper, DWORD pid) {
 void shaper_periodic_cleanup(ShaperInstance *shaper, int interval_seconds, int max_age_seconds) {
     if (!shaper) return;
     shaper_cleanup_pid_traffic(shaper, interval_seconds, max_age_seconds);
+}
+
+// Refresh only the token buckets for all existing rules.
+// Does NOT re-resolve PIDs - rates only.
+bool shaper_refresh_rule_buckets(ShaperInstance *shaper) {
+    if (!shaper || !shaper->is_running) return false;
+
+    EnterCriticalSection(&shaper->global_lock);
+
+    ProcessRule *r, *tmp;
+    HASH_ITER(hh, shaper->rules, r, tmp) {
+        // Skip rules pending deletion
+        if (r->flags & RULE_FLAG_PENDING_FREE) continue;
+
+        int burst = r->burst > 0 ? r->burst 
+                                 : (shaper->burst_size > 0 ? shaper->burst_size : DEFAULT_DL_BUFFER);
+
+        for (int n = 0; n < (int)shaper->params.nic_count; n++) {
+            // Refresh download bucket
+            if (r->dl_buckets && !(r->flags & RULE_FLAG_DL_BLOCKED)) {
+                double dl = r->dl_rate > 0 ? r->dl_rate : shaper->download_rate;
+
+                // Clamp to global limits
+                if (shaper->params.download_limits[n] > 0 && dl > shaper->params.download_limits[n])
+                    dl = shaper->params.download_limits[n];
+                else if (shaper->download_rate > 0 && dl > shaper->download_rate)
+                    dl = shaper->download_rate;
+
+                token_bucket_update_rate(&r->dl_buckets[n], dl, burst);
+            }
+
+            // Refresh upload bucket
+            if (r->ul_buckets && !(r->flags & RULE_FLAG_UL_BLOCKED)) {
+                double ul = r->ul_rate > 0 ? r->ul_rate : shaper->upload_rate;
+
+                // Clamp to global limits
+                if (shaper->params.upload_limits[n] > 0 && ul > shaper->params.upload_limits[n])
+                    ul = shaper->params.upload_limits[n];
+                else if (shaper->upload_rate > 0 && ul > shaper->upload_rate)
+                    ul = shaper->upload_rate;
+
+                token_bucket_update_rate(&r->ul_buckets[n], ul, burst);
+            }
+        }
+    }
+
+    LeaveCriticalSection(&shaper->global_lock);
+    return true;
 }
 
 bool shaper_reload_rules(ShaperInstance *shaper) {
@@ -2543,38 +2622,33 @@ HANDLE shaper_get_thread_handle(const ShaperInstance *shaper) {
 bool shaper_snapshot_traffic(ShaperInstance *shaper, TrafficSnapshot *snapshot) {
     if (!shaper || !snapshot) return false;
 
-    // First pass: count total PIDs
-    int total_pids = 0;
-    for (int i = 0; i < PID_CACHE_SHARDS; i++) {
-        EnterCriticalSection(&shaper->pid_traffic_locks[i]);
-        PidTraffic *pt;
-        for (pt = shaper->pid_traffic_shards[i]; pt != NULL; pt = pt->hh.next) {
-            total_pids++;
-        }
-        LeaveCriticalSection(&shaper->pid_traffic_locks[i]);
-    }
-
-    if (total_pids == 0) {
-        snapshot->entries = NULL;
-        snapshot->count = 0;
-        snapshot->capacity = 0;
-        snapshot->timestamp = GetTickCount64();
-        return true;
-    }
-
-    // Allocate exact size needed
-    snapshot->entries = malloc(sizeof(TrafficSnapshotEntry) * total_pids);
-    if (!snapshot->entries) return false;
-    snapshot->capacity = total_pids;
+    // Single-pass: grow array dynamically while holding locks
+    snapshot->entries = NULL;
     snapshot->count = 0;
+    snapshot->capacity = 0;
     snapshot->truncated = false;
     snapshot->timestamp = GetTickCount64();
 
-    // Second pass: fill data
     for (int i = 0; i < PID_CACHE_SHARDS; i++) {
         EnterCriticalSection(&shaper->pid_traffic_locks[i]);
         PidTraffic *pt;
-        for (pt = shaper->pid_traffic_shards[i]; pt != NULL; pt = pt->hh.next) {
+        for (pt = shaper->pid_traffic_shards[i]; pt; pt = pt->hh.next) {
+            // Grow array if needed
+            if (snapshot->count >= snapshot->capacity) {
+                size_t new_cap = snapshot->capacity ? snapshot->capacity * 2 : 64;
+                TrafficSnapshotEntry *new_entries = realloc(snapshot->entries, new_cap * sizeof(TrafficSnapshotEntry));
+                if (!new_entries) {
+                    LeaveCriticalSection(&shaper->pid_traffic_locks[i]);
+                    free(snapshot->entries);
+                    snapshot->entries = NULL;
+                    snapshot->count = 0;
+                    snapshot->capacity = 0;
+                    return false;
+                }
+                snapshot->entries = new_entries;
+                snapshot->capacity = (int)new_cap;
+            }
+
             snapshot->entries[snapshot->count].pid = pt->pid;
             snapshot->entries[snapshot->count].dl_bytes = 
                 (uint64_t)InterlockedCompareExchange64(
@@ -2585,6 +2659,15 @@ bool shaper_snapshot_traffic(ShaperInstance *shaper, TrafficSnapshot *snapshot) 
             snapshot->count++;
         }
         LeaveCriticalSection(&shaper->pid_traffic_locks[i]);
+    }
+
+    // Shrink to exact size
+    if (snapshot->count < snapshot->capacity) {
+        TrafficSnapshotEntry *smaller = realloc(snapshot->entries, snapshot->count * sizeof(TrafficSnapshotEntry));
+        if (smaller || snapshot->count == 0) {
+            snapshot->entries = smaller;
+            snapshot->capacity = snapshot->count;
+        }
     }
 
     return true;

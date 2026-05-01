@@ -28,17 +28,17 @@ typedef struct ProcessRule {
 #define RULE_FLAG_UL_BLOCKED    (1 << 2)  // Upload direction is blocked
 #define RULE_FLAG_HAS_QUOTA_IN  (1 << 3)  // Has inbound quota
 #define RULE_FLAG_HAS_QUOTA_OUT (1 << 4)  // Has outbound quota
-#define RULE_FLAG_QUOTA_IN_EXHAUSTED  (1 << 5)  // Inbound quota reached
-#define RULE_FLAG_QUOTA_OUT_EXHAUSTED (1 << 6)  // Outbound quota reached
-#define RULE_FLAG_NEEDS_REFRESH       (1 << 7)  // PID map needs refresh
-#define RULE_FLAG_DL_EXPLICITLY_BLOCKED (1 << 8)  // Download was explicitly blocked at creation
-#define RULE_FLAG_UL_EXPLICITLY_BLOCKED (1 << 9)  // Upload was explicitly blocked at creation
-#define RULE_FLAG_HAS_SCHEDULE          (1 << 10)  // Rule has a schedule
-#define RULE_FLAG_SCHEDULE_ACTIVE       (1 << 11)  // Schedule is currently active
+#define RULE_FLAG_NEEDS_REFRESH (1 << 5)  // PID map needs refresh
+#define RULE_FLAG_DL_EXPLICITLY_BLOCKED (1 << 6)   // Download was explicitly blocked at creation
+#define RULE_FLAG_UL_EXPLICITLY_BLOCKED (1 << 7)   // Upload was explicitly blocked at creation
+#define RULE_FLAG_HAS_SCHEDULE          (1 << 8)   // Rule has a schedule
+#define RULE_FLAG_SCHEDULE_ACTIVE       (1 << 9)   // Schedule is currently active
+#define RULE_FLAG_PENDING_FREE          (1 << 10)  // Rule is pending to be removed
 
     double dl_rate;
     double ul_rate;
     int burst;
+    int bucket_nic_count;
     PIDEntry *pids;
     TokenBucket *dl_buckets;
     TokenBucket *ul_buckets;
@@ -133,54 +133,71 @@ ShaperInstance *shaper_create(void);
 void shaper_destroy(ShaperInstance *shaper);
 
 // -----------------------------------------------------------------------
+// Shaper Configuration
+// -----------------------------------------------------------------------
+typedef struct ShaperConfig {
+    // Throttling parameters
+    const ThrottlingParams *params;
+    const ProcessParams *processparams;
+
+    // Global rate limits (bytes/sec)
+    double download_rate;
+    double upload_rate;
+
+    // Buffer sizes
+    unsigned int download_buffer_size;
+    unsigned int upload_buffer_size;
+
+    // Connection limits
+    unsigned int max_tcp_connections;
+    unsigned int max_udp_packets_per_second;
+
+    // Network simulation
+    unsigned int latency_ms;
+    float packet_loss;
+
+    // Priority and burst
+    int priority;
+    int burst_size;
+
+    // Data cap (bytes, 0 = unlimited)
+    uint64_t data_cap_bytes;
+
+    // Quota check interval (ms)
+    unsigned int quota_check_interval_ms;
+
+    // Global schedule (NULL or empty = always active)
+    const Schedule *global_schedule;
+
+    // Runtime flags
+    bool quiet_mode;
+    bool enable_statistics;
+} ShaperConfig;
+
+// Helper to initialize with defaults
+static inline void shaper_config_init(ShaperConfig *cfg) {
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->download_buffer_size = DEFAULT_DL_BUFFER;
+    cfg->upload_buffer_size = DEFAULT_UL_BUFFER;
+    cfg->quota_check_interval_ms = QUOTA_CHECK_INTERVAL;
+    cfg->enable_statistics = true;
+}
+
+// -----------------------------------------------------------------------
 // Control
 // -----------------------------------------------------------------------
 
 // Start packet interception using the supplied parameters.
 // Takes ownership of nothing - caller keeps params alive for the duration.
 // Returns false and logs an error if startup fails.
-bool shaper_start(ShaperInstance *shaper,
-                  const ThrottlingParams *params,
-                  const ProcessParams *processparams,
-                  double download_rate,
-                  double upload_rate,
-                  unsigned int download_buffer_size,
-                  unsigned int upload_buffer_size,
-                  unsigned int max_tcp_connections,
-                  unsigned int max_udp_packets_per_second,
-                  unsigned int latency_ms,
-                  float packet_loss,
-                  int priority,
-                  int burst_size,
-                  uint64_t data_cap_bytes,
-                  unsigned int quota_check_interval_ms,
-                  const Schedule *global_schedule,
-                  bool quiet_mode,
-                  bool enable_statistics);
+bool shaper_start(ShaperInstance *shaper, const ShaperConfig *config);
 
 // Signal the processing loop to stop and wait for clean shutdown.
 void shaper_stop(ShaperInstance *shaper);
 
 // Tear down existing buckets/rules, re-apply new parameters, and resume.
 // Equivalent to stop + start but without closing the WinDivert handle.
-bool shaper_reload(ShaperInstance *shaper,
-                   const ThrottlingParams *params,
-                   const ProcessParams *processparams,
-                   double download_rate,
-                   double upload_rate,
-                   unsigned int download_buffer_size,
-                   unsigned int upload_buffer_size,
-                   unsigned int max_tcp_connections,
-                   unsigned int max_udp_packets_per_second,
-                   unsigned int latency_ms,
-                   float packet_loss,
-                   int priority,
-                   int burst_size,
-                   uint64_t data_cap_bytes,
-                   unsigned int quota_check_interval_ms,
-                   const Schedule *global_schedule,
-                   bool quiet_mode,
-                   bool enable_statistics);
+bool shaper_reload(ShaperInstance *shaper, const ShaperConfig *config);
 
 // -----------------------------------------------------------------------
 // Status / introspection
@@ -254,6 +271,10 @@ void shaper_reset_pid_traffic(ShaperInstance *shaper, DWORD pid);
 void shaper_cleanup_pid_traffic(ShaperInstance *shaper, int interval_seconds, int max_age_seconds);
 void shaper_periodic_cleanup(ShaperInstance *shaper, int interval_seconds, int max_age_seconds);
 
+// Update bucket rates for all existing rules without PID map churn.
+// Call when only rate limits changed (not process names/PIDs).
+bool shaper_refresh_rule_buckets(ShaperInstance *shaper);
+
 // -----------------------------------------------------------------------
 // Thread introspection
 // -----------------------------------------------------------------------
@@ -298,9 +319,7 @@ bool shaper_set_process_quota(ShaperInstance *shaper,
 bool shaper_get_process_quota(ShaperInstance *shaper,
                                const char *identifier,
                                uint64_t *quota_in,
-                               uint64_t *quota_out,
-                               bool *in_reached,
-                               bool *out_reached);
+                               uint64_t *quota_out);
 
 // Reset quota enforcement state (e.g., after CLI has handled quota breach).
 // Pass clear_counters=true to also zero the dl_bytes/ul_bytes counters.
@@ -329,6 +348,9 @@ bool shaper_get_process_pids(ShaperInstance *shaper,
                              const char *process_name,
                              DWORD *pid_array,
                              int *count);
+
+// Update process PIDs for the shaper
+void shaper_update_process_pids(ShaperInstance *shaper);
 
 // An entry for traffic snapshot
 typedef struct TrafficSnapshotEntry {

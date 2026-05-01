@@ -1,6 +1,6 @@
 // args_parser.c
 // CLI argument and INI config-file parsing for BandwidthShaper.
-// See cli_args_parser.h for the public API.
+// See args_parser.h for the public API.
 
 #include "args_parser.h"
 #include "shaper_utils.h"
@@ -14,9 +14,10 @@ void parsed_args_init(ParsedArgs *args) {
     memset(args, 0, sizeof(*args));
     args->download_buffer_size = DEFAULT_DL_BUFFER;
     args->upload_buffer_size = DEFAULT_UL_BUFFER;
-    args->process.min_update_interval_ms = 5000;
+    args->process.min_update_interval_ms = STATS_UPDATE_INTERVAL;
     args->process.last_update_time = clock();
-    args->quota_check_interval_ms = 15000;
+    args->quota_check_interval_ms = QUOTA_CHECK_INTERVAL;
+    args->stats_interval_ms = STATS_UPDATE_INTERVAL;
 }
 
 void parsed_args_free(ParsedArgs *args) {
@@ -63,6 +64,7 @@ static bool append_rule(ParsedArgs *args, const char *identifier,
     e->ul_rate = ul_rate;
     e->quota_in = quota_in;
     e->quota_out = quota_out;
+    e->quota_breach_logged = false;
     if (schedule) e->schedule = *schedule;
     else          schedule_init(&e->schedule);
     e->next = NULL;
@@ -89,20 +91,21 @@ static bool parse_rule_string(const char *rules_str, ParsedArgs *args) {
     if (!copy) { fprintf(stderr, "OOM in parse_rule_string\n"); return false; }
 
     bool ok = true;
-    char *tok = strtok(copy, ",");
+    char *outer_ctx = NULL;
+    char *tok = strtok_s(copy, ",", &outer_ctx);
     while (tok) {
-        // Trim leading/trailing whitespace
         while (isspace((unsigned char)*tok)) tok++;
         char *end = tok + strlen(tok) - 1;
         while (end >= tok && isspace((unsigned char)*end)) *end-- = '\0';
 
-        char *identifier = strtok(tok, " \t");
-        char *dl_str = strtok(NULL, " \t");
-        char *ul_str = strtok(NULL, " \t");
-        char *extra = strtok(NULL, " \t");
+        char *inner_ctx = NULL;
+        char *identifier = strtok_s(tok, " \t", &inner_ctx);
+        char *dl_str = strtok_s(NULL, " \t", &inner_ctx);
+        char *ul_str = strtok_s(NULL, " \t", &inner_ctx);
+        char *extra = strtok_s(NULL, " \t", &inner_ctx);
 
         if (!identifier || !dl_str || !ul_str || extra) {
-            fprintf(stderr, "Invalid --rule format: '%s' (expected: name_or_pid DL_RATE UL_RATE)\n", tok);
+            fprintf(stderr, "Invalid --rule format: '%s'\n", tok);
             ok = false;
         } else {
             double dl = parse_rate_with_units(dl_str);
@@ -110,7 +113,7 @@ static bool parse_rule_string(const char *rules_str, ParsedArgs *args) {
             if (!append_rule(args, identifier, dl, ul, 0, 0, NULL)) ok = false;
         }
 
-        tok = strtok(NULL, ",");
+        tok = strtok_s(NULL, ",", &outer_ctx);
     }
 
     free(copy);
@@ -305,6 +308,16 @@ bool parse_args(int argc, char **argv, ParsedArgs *args) {
                         args->quota_check_interval_ms);
             }
 
+        } else if ((strcmp(argv[i], "--stats-interval") == 0 || 
+                    strcmp(argv[i], "-I") == 0)) {
+            NEXT_ARG("--stats-interval");
+            args->stats_interval_ms = (unsigned int)atoi(argv[i]);
+            if (args->stats_interval_ms < 500) {
+                fprintf(stderr, "Warning: stats interval too low (%u ms), minimum 500 ms recommended\n",
+                        args->stats_interval_ms);
+                args->stats_interval_ms = 500;
+            }
+
         } else if ((strcmp(argv[i], "--config") == 0 || strcmp(argv[i], "-C") == 0)) {
             NEXT_ARG("--config");
             args->config_path = argv[i]; // points into argv - not owned
@@ -391,8 +404,8 @@ static bool parse_config_line(FILE *fp,
         while (vend > value_start && isspace((unsigned char)*vend)) vend--;
         vend[1] = '\0';
 
-        bool implicit_continue = (strlen(value_start) > 0 &&
-                                   value_start[strlen(value_start) - 1] == ',');
+        bool implicit_continue = (strlen(trimmed) > 0 &&
+                                   trimmed[strlen(trimmed) - 1] == ',');
 
         strncpy(accumulated_value, value_start, sizeof(accumulated_value) - 1);
         accumulated_value[sizeof(accumulated_value) - 1] = '\0';
@@ -423,7 +436,7 @@ static bool parse_config_line(FILE *fp,
             strncat(accumulated_value, trimmed, sizeof(accumulated_value) - acc_len - 1);
         } else {
             size_t available = sizeof(accumulated_value) - acc_len - 1;
-            if (acc_len < available) {  // Check if we have room for space + null
+            if (acc_len + 1 + strlen(trimmed) < sizeof(accumulated_value)) {  // Check if we have room for space + null
                 accumulated_value[acc_len] = ' ';
                 accumulated_value[acc_len + 1] = '\0';
                 strncat(accumulated_value, trimmed, available - 2);
@@ -447,10 +460,12 @@ static bool parse_config_line(FILE *fp,
 // Config-file: apply one key/value pair by routing through parse_args
 // -----------------------------------------------------------------------
 
-// Map INI key → CLI flag and call parse_args with a synthetic two/three
+// Map INI key -> CLI flag and call parse_args with a synthetic two/three
 // element argv so we reuse all the validation logic in one place.
 static bool apply_config_value(const char *key, const char *value,
                                 ParsedArgs *args) {
+    char program_name[] = "<config>";
+
     // Boolean flags that take no value argument
     if (strcmp(key, "statistics") == 0) {
         if (strcmp(value, "true") == 0 || strcmp(value, "1") == 0 ||
@@ -469,6 +484,34 @@ static bool apply_config_value(const char *key, const char *value,
             strcmp(value, "yes")  == 0 || strcmp(value, "on") == 0)
             list_network_interfaces();
         return true; // Never causes a config-load failure
+    }
+
+    // --stop-at needs special handling: the value string contains 3 space-separated parts
+    if (strcmp(key, "stop-at") == 0 || strcmp(key, "stop_at") == 0) {
+        char *value_copy = strdup(value);
+        if (!value_copy) {
+            fprintf(stderr, "OOM processing config value for '%s'\n", key);
+            return false;
+        }
+
+        char *inner_ctx = NULL;
+        char *identifier = strtok_s(value_copy, " \t", &inner_ctx);
+        char *quota_in = strtok_s(NULL,   " \t", &inner_ctx);
+        char *quota_out = strtok_s(NULL,   " \t", &inner_ctx);
+        char *extra = strtok_s(NULL,   " \t", &inner_ctx);
+
+        bool ok = true;
+        if (!identifier || !quota_in || !quota_out || extra) {
+            fprintf(stderr, "Error in config: '%s' requires 3 values: "
+                            "<process|PID> <QUOTA_IN> <QUOTA_OUT>\n", key);
+            ok = false;
+        } else {
+            char *fake_argv[5] = { program_name, "--stop-at", identifier, quota_in, quota_out };
+            ok = parse_args(5, fake_argv, args);
+        }
+
+        free(value_copy);
+        return ok;
     }
 
     // Map key to CLI long flag
@@ -501,13 +544,10 @@ static bool apply_config_value(const char *key, const char *value,
     else if (strcmp(key, "schedule")               == 0) flag = "--schedule";
     else if (strcmp(key, "quota-check-interval")   == 0 ||
              strcmp(key, "quota_check_interval")   == 0) flag = "--quota-check-interval";
-    else {
-        // Unknown key - silently skip (allows forward-compat config files)
-        return true;
-    }
+    else if (strcmp(key, "stats-interval")         == 0 ||
+             strcmp(key, "stats_interval")         == 0) flag = "--stats-interval";
 
     // Build a synthetic 3-element argv: {"<cfg>", flag, value}
-    char program_name[] = "<config>";
     char *fake_argv[3] = { program_name, (char *)flag, (char *)value };
     return parse_args(3, fake_argv, args);
 }
@@ -583,12 +623,13 @@ void print_help(const char *program_path) {
     printf("                                                  Days: 1=Mon..7=Sun; ranges (1-5) and lists (1,3,5) OK\n");
     printf("                                                  Examples: 0800-1800~1-5  2200-0600~6,7\n");
     printf("  -Q, --quota-check-interval <ms>               How often to check quotas/schedules (default: 15000ms)\n");
+    printf("  -I, --stats-interval <ms>                     How often to print statistics (default: %dms, requires -s)\n", STATS_UPDATE_INTERVAL);
     printf("  -i, --process-update-interval <NUM>[p|t][,c]  Packet/time threshold for PID refresh + optional cooldown\n");
     printf("  -a, --disable-after <RATE>[KB|MB|GB]          Disable internet after reaching data cap (0 = no cap)\n");
     printf("  -d, --download <RATE>[b|Kb|KB|Mb|MB|Gb|GB]    Download speed limit per second (default unit: KB)\n");
-    printf("  -u, --upload   <RATE>[b|Kb|KB|Mb|MB|Gb|GB]    Upload speed limit per second (default unit: KB)\n");
+    printf("  -u, --upload <RATE>[b|Kb|KB|Mb|MB|Gb|GB]      Upload speed limit per second (default unit: KB)\n");
     printf("  -D, --download-buffer <bytes>                 Max download buffer size in bytes (default: %d)\n", DEFAULT_DL_BUFFER);
-    printf("  -U, --upload-buffer   <bytes>                 Max upload buffer size in bytes (default: %d)\n", DEFAULT_UL_BUFFER);
+    printf("  -U, --upload-buffer <bytes>                   Max upload buffer size in bytes (default: %d)\n", DEFAULT_UL_BUFFER);
     printf("  -t, --tcp-limit <NUM>                         Max active TCP connections (0 = unlimited)\n");
     printf("  -r, --udp-limit <NUM>                         Max UDP packets/sec (0 = unlimited)\n");
     printf("  -b, --burst <RATE>[b|Kb|KB|Mb|MB|Gb|GB]       Burst size override (0 = use buffer size)\n");

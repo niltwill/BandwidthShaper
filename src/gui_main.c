@@ -138,13 +138,18 @@ static LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
 
 // WinMain
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmdLine, int nCmdShow) {
-
     (void)hPrev; (void)lpCmdLine;
     g_hInst = hInst;
 
-    // Initialize COM for shell operations
+    // Track COM initialization state
+    bool comInitialized = false;
     HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
-    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
+    if (SUCCEEDED(hr)) {
+        comInitialized = true;
+    } else if (hr == RPC_E_CHANGED_MODE) {
+        // Already initialized with different mode - continue but don't uninitialize
+        comInitialized = false;
+    } else {
         MSGBOX(NULL, L"Failed to initialize COM", L"Error", MB_OK);
         return 1;
     }
@@ -266,7 +271,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmdLine, int nCmd
     WSACleanup();
     CloseHandle(hMutex);
     UnregisterClassW(L"BandwidthShaperMain", hInst);
-    if (SUCCEEDED(hr) || hr == S_FALSE) {
+    if (comInitialized) {
         CoUninitialize();
     }
     return (int)msg.wParam;

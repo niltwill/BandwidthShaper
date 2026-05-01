@@ -25,12 +25,12 @@ bool pid_pool_init_once(PIDEntryPool *pool, int initial_size) {
     }
     if (prev == 1) {
         // Another thread is initializing, wait
-        while (g_pool_init_state != 2) {
+        while (g_pool_init_state == 1) {
             Sleep(1);
         }
-        return true;
+        return g_pool_init_state == 2;
     }
-    
+
     // We are the initializer (prev == 0)
     bool ok = pid_pool_init(pool, initial_size);
     InterlockedExchange(&g_pool_init_state, ok ? 2 : 0);  // Mark done or reset to allow retry
@@ -75,6 +75,7 @@ bool pid_pool_init(PIDEntryPool *pool, int initial_size) {
 void pid_pool_cleanup(PIDEntryPool *pool) {
     if (!pool || !pool->initialized) return;
 
+    // Attempt to enter the lock to ensure no concurrent operations
     EnterCriticalSection(&pool->lock);
 
     // Free all arenas
@@ -196,10 +197,9 @@ void pid_pool_free(PIDEntryPool *pool, PIDEntry *entry) {
                         pool->free_list_capacity = new_capacity;
                     } else {
                         // Can't expand - log warning once and leak (better than crashing)
-                        static bool warned = false;
-                        if (!warned) {
+                        static LONG warned_flag = 0;
+                        if (!InterlockedCompareExchange(&warned_flag, 1, 0)) {
                             fprintf(stderr, "Warning: PID free list full, memory will leak until shutdown\n");
-                            warned = true;
                         }
                         LeaveCriticalSection(&pool->lock);
                         return;
@@ -321,7 +321,12 @@ int get_pids_from_name(const char *process_name, int **pid_list) {
 
     if (pid_count == 0) { free(pids); *pid_list = NULL; return 0; }
     int *trimmed = realloc(pids, pid_count * sizeof(int));
-    *pid_list = trimmed ? trimmed : pids;
+    if (!trimmed) {
+        // realloc failed: pids is still valid, just use it as-is
+        *pid_list = pids;  // pids is already the correct size
+    } else {
+        *pid_list = trimmed;
+    }
     return pid_count;
 }
 
@@ -359,18 +364,21 @@ bool is_process_alive(int pid) {
 // PID table cache - lifecycle
 // -----------------------------------------------------------------------
 
-void pid_cache_init(PidTableCache *cache, double cache_ttl_ms,
-                    double perf_frequency) {
+void pid_cache_init(PidTableCache *cache, double cache_ttl_ms, double perf_frequency) {
     memset(cache, 0, sizeof(*cache));
     cache->ttl_ticks = (LONGLONG)(cache_ttl_ms * perf_frequency / 1000.0);
+    InitializeCriticalSection(&cache->lock);
 }
 
 void pid_cache_cleanup(PidTableCache *cache) {
     if (!cache) return;
+    EnterCriticalSection(&cache->lock);
     free(cache->tcp4_table); cache->tcp4_table = NULL;
     free(cache->tcp6_table); cache->tcp6_table = NULL;
     free(cache->udp4_table); cache->udp4_table = NULL;
     free(cache->udp6_table); cache->udp6_table = NULL;
+    LeaveCriticalSection(&cache->lock);
+    DeleteCriticalSection(&cache->lock);
 }
 
 // -----------------------------------------------------------------------
@@ -408,13 +416,24 @@ static void *fetch_owner_pid_table(int family, int class_id, bool is_tcp) {
 void refresh_pid_cache(PidTableCache *cache) {
     LONGLONG now = get_time_ticks();
 
-    if (now - cache->last_refresh_ticks < cache->ttl_ticks) return;
+    EnterCriticalSection(&cache->lock);
+
+    // Check TTL again under lock (double-checked locking pattern)
+    if (now - cache->last_refresh_ticks < cache->ttl_ticks) {
+        LeaveCriticalSection(&cache->lock);
+        return;
+    }
 
     // Free stale tables
-    free(cache->tcp4_table); cache->tcp4_table = NULL;
-    free(cache->tcp6_table); cache->tcp6_table = NULL;
-    free(cache->udp4_table); cache->udp4_table = NULL;
-    free(cache->udp6_table); cache->udp6_table = NULL;
+    void *old_tcp4 = cache->tcp4_table;
+    void *old_tcp6 = cache->tcp6_table;
+    void *old_udp4 = cache->udp4_table;
+    void *old_udp6 = cache->udp6_table;
+
+    cache->tcp4_table = NULL;
+    cache->tcp6_table = NULL;
+    cache->udp4_table = NULL;
+    cache->udp6_table = NULL;
 
     cache->tcp4_table = fetch_owner_pid_table(AF_INET, TCP_TABLE_OWNER_PID_ALL, true);
     cache->tcp6_table = fetch_owner_pid_table(AF_INET6, TCP_TABLE_OWNER_PID_ALL, true);
@@ -422,6 +441,14 @@ void refresh_pid_cache(PidTableCache *cache) {
     cache->udp6_table = fetch_owner_pid_table(AF_INET6, UDP_TABLE_OWNER_PID, false);
 
     cache->last_refresh_ticks = now;
+
+    // Free old tables after pointers are swapped
+    free(old_tcp4);
+    free(old_tcp6);
+    free(old_udp4);
+    free(old_udp6);
+
+    LeaveCriticalSection(&cache->lock);
 }
 
 // -----------------------------------------------------------------------
@@ -477,13 +504,15 @@ DWORD get_packet_pid(PidTableCache *cache,
 
     DWORD pid = 0;
 
+    EnterCriticalSection(&cache->lock);
+
     if (tcp_hdr) {
         if (!is_ipv6 && cache->tcp4_table) {
             PMIB_TCPTABLE_OWNER_PID t = (PMIB_TCPTABLE_OWNER_PID)cache->tcp4_table;
             for (DWORD i = 0; i < t->dwNumEntries; i++) {
                 MIB_TCPROW_OWNER_PID *row = &t->table[i];
                 if (ntohs((UINT16)row->dwLocalPort) == local_port &&
-                    row->dwLocalAddr == *(DWORD *)local_addr) {
+                    memcmp(&row->dwLocalAddr, local_addr, 4) == 0) {
                     pid = row->dwOwningPid;
                     break;
                 }
@@ -505,7 +534,7 @@ DWORD get_packet_pid(PidTableCache *cache,
             for (DWORD i = 0; i < t->dwNumEntries; i++) {
                 MIB_UDPROW_OWNER_PID *row = &t->table[i];
                 if (ntohs((UINT16)row->dwLocalPort) == local_port &&
-                    row->dwLocalAddr == *(DWORD *)local_addr) {
+                    memcmp(&row->dwLocalAddr, local_addr, 4) == 0) {
                     pid = row->dwOwningPid;
                     break;
                 }
@@ -522,6 +551,8 @@ DWORD get_packet_pid(PidTableCache *cache,
             }
         }
     }
+
+    LeaveCriticalSection(&cache->lock);
 
     return pid;
 }

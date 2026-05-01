@@ -10,6 +10,9 @@ set FILES=cli_main.c args_parser.c shaper_core.c shaper_utils.c schedule.c token
 :: Linker settings
 set LINKER=ws2_32.lib Advapi32.lib Kernel32.lib User32.lib iphlpapi.lib
 
+:: Compile flags
+set COMPILE_FLAGS=-DCLI_APP_BUILD=1
+
 :: WinDivert libs
 set WINDIVERT_X86=external\lib\X86\WinDivert.lib
 set WINDIVERT_X64=external\lib\X64\WinDivert64.lib
@@ -45,6 +48,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 cl /EHsc /std:c17 /TC ^
+    %COMPILE_FLAGS% ^
     %FILES% ^
     /link /out:%REL_X86% ^
     %WINDIVERT_X86% %LINKER% ^
@@ -75,6 +79,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 cl /EHsc /std:c17 /TC ^
+    %COMPILE_FLAGS% ^
     %FILES% ^
     /link /out:%REL_X64% ^
     %WINDIVERT_X64% %LINKER% ^
@@ -105,6 +110,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 cl /EHsc /std:c17 /TC ^
+    %COMPILE_FLAGS% ^
     %FILES% ^
     /link /out:%REL_ARM64% ^
     %WINDIVERT_ARM64% %LINKER% ^

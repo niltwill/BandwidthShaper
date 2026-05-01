@@ -80,6 +80,14 @@ void token_bucket_update(TokenBucket *bucket) {
     } while (InterlockedCompareExchange(&bucket->tokens, new_tokens, current_tokens) != current_tokens);
 }
 
+void token_bucket_update_rate(TokenBucket *bucket, double new_rate, int new_burst) {
+    if (!bucket) return;
+    bucket->rate = new_rate;
+    bucket->max_tokens = new_burst;           // max_tokens is the burst size
+    bucket->tokens = (LONG)new_burst;         // Refill to new burst size
+    bucket->last_checked = get_time_ticks();  // Reset timer
+}
+
 bool token_bucket_has_enough_tokens(TokenBucket *bucket, int packet_size) {
     return bucket->tokens >= packet_size;
 }

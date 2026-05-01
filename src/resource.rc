@@ -63,97 +63,97 @@ CAPTION "Options"
 FONT 9, "Segoe UI"
 BEGIN
     // Global Limits Group
-    GROUPBOX "Global Bandwidth Limits", IDC_STATIC, 8, 8, 200, 60
+    GROUPBOX "Global Bandwidth Limits", IDC_STATIC, 8, 8, 200, 80
     LTEXT "Download:", IDC_STATIC, 16, 24, 50, 10
     EDITTEXT IDC_OPT_DL_GLOBAL, 70, 22, 60, 12, ES_NUMBER
     LTEXT "KB/s (0 = unlimited)", IDC_STATIC, 135, 24, 70, 10
-    
+
     LTEXT "Upload:", IDC_STATIC, 16, 44, 50, 10
     EDITTEXT IDC_OPT_UL_GLOBAL, 70, 42, 60, 12, ES_NUMBER
     LTEXT "KB/s (0 = unlimited)", IDC_STATIC, 135, 44, 70, 10
-    
+
+    LTEXT "Data cap:", IDC_STATIC, 16, 64, 40, 10
+    EDITTEXT IDC_OPT_DATA_CAP, 70, 62, 60, 12, ES_NUMBER
+    LTEXT "MB (0 = unlimited)", IDC_STATIC, 135, 64, 60, 10
+
     // NIC Selection Group
     GROUPBOX "Network Interfaces", IDC_STATIC, 220, 8, 190, 100
     LTEXT "Selected NICs:", IDC_STATIC, 228, 24, 60, 10
     LISTBOX IDC_OPT_NIC_LIST, 228, 36, 174, 64, LBS_MULTIPLESEL | WS_VSCROLL | WS_TABSTOP
-    
+
     // Buffer Settings Group
-    GROUPBOX "Buffer Settings", IDC_STATIC, 8, 75, 200, 75
-    LTEXT "Download buffer:", IDC_STATIC, 16, 91, 70, 10
-    EDITTEXT IDC_OPT_DL_BUFFER, 90, 89, 60, 12, ES_NUMBER
-    LTEXT "bytes", IDC_STATIC, 155, 91, 25, 10
-    
-    LTEXT "Upload buffer:", IDC_STATIC, 16, 111, 70, 10
-    EDITTEXT IDC_OPT_UL_BUFFER, 90, 109, 60, 12, ES_NUMBER
+    GROUPBOX "Buffer Settings", IDC_STATIC, 8, 95, 200, 75
+    LTEXT "Download buffer:", IDC_STATIC, 16, 111, 70, 10
+    EDITTEXT IDC_OPT_DL_BUFFER, 90, 109, 60, 12, ES_NUMBER
     LTEXT "bytes", IDC_STATIC, 155, 111, 25, 10
-    
-    LTEXT "Burst size:", IDC_STATIC, 16, 131, 70, 10
-    EDITTEXT IDC_OPT_BURST_SIZE, 90, 129, 60, 12, ES_NUMBER
-    LTEXT "bytes (0 = auto)", IDC_STATIC, 155, 131, 50, 10
-    
+
+    LTEXT "Upload buffer:", IDC_STATIC, 16, 131, 70, 10
+    EDITTEXT IDC_OPT_UL_BUFFER, 90, 129, 60, 12, ES_NUMBER
+    LTEXT "bytes", IDC_STATIC, 155, 131, 25, 10
+
+    LTEXT "Burst size:", IDC_STATIC, 16, 151, 70, 10
+    EDITTEXT IDC_OPT_BURST_SIZE, 90, 149, 60, 12, ES_NUMBER
+    LTEXT "bytes (0 = auto)", IDC_STATIC, 155, 151, 50, 10
+
     // Process Update Group
-    GROUPBOX "Process Update Interval", IDC_STATIC, 8, 155, 200, 85
-    LTEXT "Update every:", IDC_STATIC, 16, 171, 55, 10
-    EDITTEXT IDC_OPT_UPDATE_INTERVAL, 75, 169, 50, 12, ES_NUMBER
-    
+    GROUPBOX "Process Update Interval", IDC_STATIC, 8, 175, 200, 75
+    LTEXT "Update every:", IDC_STATIC, 16, 191, 55, 10
+    EDITTEXT IDC_OPT_UPDATE_INTERVAL, 75, 189, 50, 12, ES_NUMBER
+
     CONTROL "Packets", IDC_OPT_UPDATE_TYPE, "Button", BS_AUTORADIOBUTTON | WS_GROUP,
-            130, 171, 50, 10
+            130, 205, 60, 10
     CONTROL "Milliseconds", IDC_OPT_UPDATE_TYPE + 1, "Button", BS_AUTORADIOBUTTON,
-            130, 185, 60, 10
-    
-    LTEXT "Cooldown:", IDC_STATIC, 16, 205, 55, 10
-    EDITTEXT IDC_OPT_UPDATE_COOLDOWN, 75, 203, 50, 12, ES_NUMBER
-    LTEXT "ms", IDC_STATIC, 130, 205, 20, 10
-    
+            130, 191, 50, 10
+
+    LTEXT "Cooldown:", IDC_STATIC, 16, 225, 55, 10
+    EDITTEXT IDC_OPT_UPDATE_COOLDOWN, 75, 223, 50, 12, ES_NUMBER
+    LTEXT "ms", IDC_STATIC, 130, 225, 20, 10
+
     // Advanced Group
-    GROUPBOX "Advanced", IDC_STATIC, 220, 115, 190, 145
-    LTEXT "Data cap:", IDC_STATIC, 228, 131, 40, 10
-    EDITTEXT IDC_OPT_DATA_CAP, 275, 129, 60, 12, ES_NUMBER
-    LTEXT "MB (0 = unlimited)", IDC_STATIC, 340, 131, 60, 10
-    
-    LTEXT "TCP conn limit:", IDC_STATIC, 228, 151, 60, 10
-    EDITTEXT IDC_OPT_TCP_LIMIT, 295, 149, 50, 12, ES_NUMBER
+    GROUPBOX "Advanced", IDC_STATIC, 220, 115, 190, 120
+    LTEXT "TCP conn limit:", IDC_STATIC, 228, 131, 60, 10
+    EDITTEXT IDC_OPT_TCP_LIMIT, 295, 129, 50, 12, ES_NUMBER
+    LTEXT "(0 = unlimited)", IDC_STATIC, 350, 131, 55, 10
+
+    LTEXT "UDP conn limit:", IDC_STATIC, 228, 151, 60, 10
+    EDITTEXT IDC_OPT_UDP_LIMIT, 295, 149, 50, 12, ES_NUMBER
     LTEXT "(0 = unlimited)", IDC_STATIC, 350, 151, 55, 10
-    
-    LTEXT "UDP conn limit:", IDC_STATIC, 228, 171, 60, 10
-    EDITTEXT IDC_OPT_UDP_LIMIT, 295, 169, 50, 12, ES_NUMBER
-    LTEXT "(0 = unlimited)", IDC_STATIC, 350, 171, 55, 10
-    
-    LTEXT "Latency:", IDC_STATIC, 228, 191, 40, 10
-    EDITTEXT IDC_OPT_LATENCY, 295, 189, 50, 12, ES_NUMBER
-    LTEXT "ms", IDC_STATIC, 350, 191, 20, 10
-    
-    LTEXT "Packet loss:", IDC_STATIC, 228, 211, 50, 10
-    EDITTEXT IDC_OPT_PACKET_LOSS, 295, 209, 50, 12
-    LTEXT "%", IDC_STATIC, 350, 211, 10, 10
-    
-    LTEXT "Priority:", IDC_STATIC, 228, 231, 40, 10
-    EDITTEXT IDC_OPT_PRIORITY, 295, 229, 50, 12
-    
+
+    LTEXT "Latency:", IDC_STATIC, 228, 171, 40, 10
+    EDITTEXT IDC_OPT_LATENCY, 295, 169, 50, 12, ES_NUMBER
+    LTEXT "ms", IDC_STATIC, 350, 171, 20, 10
+
+    LTEXT "Packet loss:", IDC_STATIC, 228, 191, 50, 10
+    EDITTEXT IDC_OPT_PACKET_LOSS, 295, 189, 50, 12
+    LTEXT "%", IDC_STATIC, 350, 191, 10, 10
+
+    LTEXT "Priority:", IDC_STATIC, 228, 211, 40, 10
+    EDITTEXT IDC_OPT_PRIORITY, 295, 209, 50, 12
+
     // Behavior Group
-    GROUPBOX "Behavior", IDC_STATIC, 8, 245, 200, 80
+    GROUPBOX "Behavior", IDC_STATIC, 8, 255, 200, 70
     CONTROL "Minimize to system tray", IDC_OPT_MINIMIZE_TRAY, "Button",
-            BS_AUTOCHECKBOX | WS_TABSTOP, 16, 261, 180, 10
+            BS_AUTOCHECKBOX | WS_TABSTOP, 16, 271, 180, 10
     CONTROL "Remember settings on exit", IDC_OPT_SAVE_SETTINGS, "Button",
-            BS_AUTOCHECKBOX | WS_TABSTOP, 16, 277, 180, 10
+            BS_AUTOCHECKBOX | WS_TABSTOP, 16, 287, 180, 10
     CONTROL "Remember sticky processes on exit", IDC_OPT_SAVE_STICKY_SETTINGS, "Button",
-            BS_AUTOCHECKBOX | WS_TABSTOP, 16, 293, 180, 10
+            BS_AUTOCHECKBOX | WS_TABSTOP, 16, 303, 180, 10
 
     // File Paths Group
-    GROUPBOX "File Paths", IDC_STATIC, 8, 330, 402, 80
-    LTEXT "Config folder:", IDC_STATIC, 16, 346, 60, 10
-    EDITTEXT IDC_OPT_CONFIG_DIR, 84, 344, 278, 12, ES_AUTOHSCROLL
-    PUSHBUTTON "...", IDC_OPT_CONFIG_DIR_BROWSE, 366, 343, 36, 14
-    LTEXT "(empty = same folder as the executable)", IDC_STATIC, 84, 358, 200, 10
+    GROUPBOX "File Paths", IDC_STATIC, 8, 335, 402, 80
+    LTEXT "Config folder:", IDC_STATIC, 16, 351, 60, 10
+    EDITTEXT IDC_OPT_CONFIG_DIR, 84, 349, 278, 12, ES_AUTOHSCROLL
+    PUSHBUTTON "...", IDC_OPT_CONFIG_DIR_BROWSE, 366, 348, 36, 14
+    LTEXT "(empty = same folder as the executable)", IDC_STATIC, 84, 363, 200, 10
 
-    LTEXT "Snapshots folder:", IDC_STATIC, 16, 378, 65, 10
-    EDITTEXT IDC_OPT_SNAPSHOT_DIR, 84, 376, 278, 12, ES_AUTOHSCROLL
-    PUSHBUTTON "...", IDC_OPT_SNAPSHOT_DIR_BROWSE, 366, 375, 36, 14
-    LTEXT "(empty = same folder as the executable)", IDC_STATIC, 84, 390, 200, 10
+    LTEXT "Snapshots folder:", IDC_STATIC, 16, 383, 65, 10
+    EDITTEXT IDC_OPT_SNAPSHOT_DIR, 84, 381, 278, 12, ES_AUTOHSCROLL
+    PUSHBUTTON "...", IDC_OPT_SNAPSHOT_DIR_BROWSE, 366, 380, 36, 14
+    LTEXT "(empty = same folder as the executable)", IDC_STATIC, 84, 395, 200, 10
 
     // Buttons
-    DEFPUSHBUTTON "OK", IDOK, 270, 424, 60, 16
-    PUSHBUTTON "Cancel", IDCANCEL, 340, 424, 60, 16
+    DEFPUSHBUTTON "OK", IDOK, 270, 425, 60, 16
+    PUSHBUTTON "Cancel", IDCANCEL, 340, 425, 60, 16
 END
 
 // --------------------------------------------------------------------

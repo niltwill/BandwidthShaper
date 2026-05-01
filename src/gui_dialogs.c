@@ -20,6 +20,8 @@ typedef struct {
     BOOL initialized;
     TrafficSnapshot last_snapshot;
     bool has_snapshot;
+    HWND hDlChart;
+    HWND hUlChart;
 } StatsDialogContext;
 
 // Control IDs for ScheduleDlgProc (avoids conflict with main window)
@@ -46,6 +48,21 @@ enum {
     SDLG_BTN_OK     = 121,
     SDLG_BTN_CANCEL = 122,
 };
+
+// Callback for SHBrowseForFolderW to handle pre-selection
+static int CALLBACK BrowseCallbackProc(HWND hwnd, UINT uMsg, LPARAM lParam, LPARAM lpData) {
+    (void)lParam;
+    switch (uMsg) {
+        case BFFM_INITIALIZED: {
+            // lpData contains the PIDL to pre-select (NULL = no pre-selection)
+            if (lpData) {
+                SendMessage(hwnd, BFFM_SETSELECTION, FALSE, lpData);
+            }
+            break;
+        }
+    }
+    return 0;
+}
 
 // ---------------------------------------------------------------------------
 // Options dialog
@@ -291,17 +308,19 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
         // Forward mouse messages to tooltip
         HWND hTip = (HWND)GetWindowLongPtr(hDlg, GWLP_USERDATA);
         if (hTip && IsWindow(hTip)) {
-            MSG msg = {0};
-            msg.hwnd = hDlg;
-            msg.message = WM_MOUSEMOVE;
-            msg.wParam = wParam;
-            msg.lParam = lParam;
-            msg.time = GetMessageTime();
-            msg.pt.x = GET_X_LPARAM(lParam);
-            msg.pt.y = GET_Y_LPARAM(lParam);
-            ClientToScreen(hDlg, &msg.pt);
-            
-            SendMessage(hTip, TTM_RELAYEVENT, 0, (LPARAM)&msg);
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            ClientToScreen(hDlg, &pt);
+
+            MSG mouseMsg = {
+                .hwnd = hDlg,
+                .message = msg,
+                .wParam = wParam,
+                .lParam = lParam,
+                .time = GetMessageTime(),
+                .pt = pt
+            };
+
+            SendMessage(hTip, TTM_RELAYEVENT, 0, (LPARAM)&mouseMsg);
         }
         break;
     }
@@ -420,6 +439,7 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
             int selCount = (int)SendMessage(hList, LB_GETSELCOUNT, 0, 0);
             if (selCount > 0) {
                 int* selItems = (int*)malloc(selCount * sizeof(int));
+                if (!selItems) return TRUE;
                 SendMessage(hList, LB_GETSELITEMS, selCount, (LPARAM)selItems);
 
                 g_app.options.selected_nics[0] = L'\0';
@@ -466,29 +486,23 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
             wchar_t start[MAX_PATH] = {0};
             GetDlgItemTextW(hDlg, edit_id, start, MAX_PATH);
 
-            // Use SHBrowseForFolderW (available on all supported Windows versions)
+            // Use SHBrowseForFolderW
             BROWSEINFOW bi = {0};
             bi.hwndOwner = hDlg;
             bi.lpszTitle = is_config
                            ? L"Select folder for the config file (BandwidthShaper.cfg):"
                            : L"Select folder for CSV snapshot exports:";
             bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
-            // Pre-select the folder currently shown in the edit box
-            if (start[0] != L'\0') {
-                bi.lParam = (LPARAM)start;
-                bi.lpfn = NULL;  // no callback needed for pre-selection via pidl below
-            }
 
-            // Convert the starting path to a PIDL so SHBrowseForFolder can
-            // pre-select it (only if the path actually exists right now)
+            // Convert the starting path to a PIDL for pre-selection
             LPITEMIDLIST pidl_start = NULL;
             if (start[0] != L'\0') {
                 SFGAOF sfgao = 0;
-                SHParseDisplayName(start, NULL, &pidl_start, 0, &sfgao);
-                if (pidl_start) bi.pidlRoot = NULL;  // use absolute pidl via pszDisplayName trick
-                // Actually pass via lParam + callback for pre-selection
-                // Simpler: just set pszDisplayName; Windows will try to expand it
-                if (pidl_start) { CoTaskMemFree(pidl_start); pidl_start = NULL; }
+                if (SUCCEEDED(SHParseDisplayName(start, NULL, &pidl_start, 0, &sfgao))) {
+                    // Set up the callback with the PIDL as user data for pre-selection
+                    bi.lpfn = BrowseCallbackProc;
+                    bi.lParam = (LPARAM)pidl_start;
+                }
             }
 
             LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
@@ -499,6 +513,8 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
                 }
                 CoTaskMemFree(pidl);
             }
+
+            if (pidl_start) CoTaskMemFree(pidl_start);
             return TRUE;
         }
         }
@@ -526,10 +542,10 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
         SetTimer(hDlg, 1, 500, NULL);
 
         // Subclass the chart controls
-        HWND hDlChart = GetDlgItem(hDlg, IDC_STATS_DL_CHART);
-        HWND hUlChart = GetDlgItem(hDlg, IDC_STATS_UL_CHART);
-        SetWindowSubclass(hDlChart, ChartWndProc, 0, 0); // 0 = download
-        SetWindowSubclass(hUlChart, ChartWndProc, 1, 0); // 1 = upload
+        ctx->hDlChart = GetDlgItem(hDlg, IDC_STATS_DL_CHART);
+        ctx->hUlChart = GetDlgItem(hDlg, IDC_STATS_UL_CHART);
+        SetWindowSubclass(ctx->hDlChart, ChartWndProc, 0, 0); // 0 = download
+        SetWindowSubclass(ctx->hUlChart, ChartWndProc, 1, 0); // 1 = upload
 
         // Configure the per-process traffic ListView (already created in resource)
         HWND hProcList = GetDlgItem(hDlg, IDC_STATS_PROC_LIST);
@@ -811,7 +827,10 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 				} TempEntry;
 
                 TempEntry *temp_entries = malloc(sizeof(TempEntry) * MAX_PROCESSES * MAX_PID_FOR_PROCESS);
-                if (!temp_entries) return TRUE;
+                if (!temp_entries) {
+                    LeaveCriticalSection(&g_app.process_lock);
+                    return TRUE;
+                }
 				int temp_count = current.count;
 
 				// Copy snapshot entries to temp array
@@ -1220,12 +1239,9 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_NCDESTROY:
         KillTimer(hDlg, 1);
-        hDlChart = GetDlgItem(hDlg, IDC_STATS_DL_CHART);
-        hUlChart = GetDlgItem(hDlg, IDC_STATS_UL_CHART);
-        if (hDlChart) RemoveWindowSubclass(hDlChart, ChartWndProc, 0);
-        if (hUlChart) RemoveWindowSubclass(hUlChart, ChartWndProc, 1);
-
         if (ctx) {
+            if (ctx->hDlChart) RemoveWindowSubclass(ctx->hDlChart, ChartWndProc, 0);
+            if (ctx->hUlChart) RemoveWindowSubclass(ctx->hUlChart, ChartWndProc, 1);
             shaper_free_traffic_snapshot(&ctx->last_snapshot);
             free(ctx);
             SetWindowLongPtr(hDlg, GWLP_USERDATA, 0);

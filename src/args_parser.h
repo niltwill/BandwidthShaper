@@ -61,11 +61,12 @@ typedef struct ParsedArgs {
     // optional schedule window.  All three may be set on the same identifier.
     struct RuleEntry {
         char identifier[MAX_PROCESS_NAME_LEN];
-        double dl_rate;           // bytes/sec; 0 = no rate limit
-        double ul_rate;           // bytes/sec; 0 = no rate limit
-        uint64_t quota_in;        // bytes; 0 = no inbound cap  (-S / --stop-at)
-        uint64_t quota_out;       // bytes; 0 = no outbound cap (-S / --stop-at)
-        Schedule schedule;        // active window; empty = always active (-T / --schedule)
+        double dl_rate;            // bytes/sec; 0 = no rate limit
+        double ul_rate;            // bytes/sec; 0 = no rate limit
+        uint64_t quota_in;         // bytes; 0 = no inbound cap  (-S / --stop-at)
+        uint64_t quota_out;        // bytes; 0 = no outbound cap (-S / --stop-at)
+        bool quota_breach_logged;  // Track whether breach was already logged
+        Schedule schedule;         // active window; empty = always active (-T / --schedule)
         struct RuleEntry *next;
     } *rules_head;
 
@@ -75,6 +76,9 @@ typedef struct ParsedArgs {
 
     // quota/schedule check interval
     unsigned int quota_check_interval_ms;
+
+    // statistics print interval (0 = use default STATS_UPDATE_INTERVAL)
+    unsigned int stats_interval_ms;
 
     // config file path
     char *config_path;

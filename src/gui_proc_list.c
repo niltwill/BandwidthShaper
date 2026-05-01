@@ -12,7 +12,7 @@
 #include <psapi.h>
 #include <shellapi.h>
 
-static volatile LONG g_updating_limits = 0;  // Used in UpdateProcessLimits
+static LONG g_updating_limits = 0;  // Used in UpdateProcessLimits
 
 // ---------------------------------------------------------------------------
 // Static data (g_processes, g_rows, g_cellEdit, etc.)
@@ -46,6 +46,8 @@ ProcFilter GetProcFilter(void) {
 // Initialization
 // ---------------------------------------------------------------------------
 void CreateProcessList(HWND hWnd) {
+    // This gets created with LVS_OWNERDATA (virtual mode),
+    // so never call "ListView_InsertItem" or "ListView_DeleteItem"
     g_app.hProcessList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEW, NULL,
         WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_OWNERDATA,
         0, 0, 0, 0, hWnd, (HMENU)IDC_PROCESS_LIST, g_hInst, NULL);
@@ -74,9 +76,9 @@ void CreateProcessList(HWND hWnd) {
     for (int i = 0; i < ListView_ColumnCount; i++) {  // Need to have the same number as the defined columns
         lvc.iSubItem = i;
 
-        // Add sort arrow to the default sort column (Process) with up arrow for ascending
-        if (i == 0) {
-            swprintf(header_text, 64, L"%s %s", cols[i].text, UP_ARROW);
+        // Add sort arrow to the saved sort column with correct direction
+        if (i == g_app.sort_column) {
+            swprintf(header_text, 64, L"%s %s", cols[i].text, g_app.sort_ascending ? UP_ARROW : DOWN_ARROW);
             lvc.pszText = header_text;
         } else {
             lvc.pszText = (LPWSTR)cols[i].text;
@@ -622,7 +624,8 @@ void UpdateProcessLimits(void) {
         if (proc->pid_count == 0) continue;
 
         // Schedule check
-        if (proc->is_sticky && !schedule_is_empty(&proc->schedule)) {
+        //if (proc->is_sticky && !schedule_is_empty(&proc->schedule)) {
+        if (!schedule_is_empty(&proc->schedule)) {
             if (!schedule_is_active_now(&proc->schedule)) continue;
         }
 
@@ -673,8 +676,8 @@ void UpdateProcessLimits(void) {
 
     LeaveCriticalSection(&g_app.process_lock);
 
-    // Now apply rules to shaper without holding any locks
-    if (local_rule_count > 0) {
+    // Now apply rules to shaper without holding any locks (always sync with core)
+    if (g_app.shaper && shaper_is_running(g_app.shaper)) {
         shaper_clear_process_rules(g_app.shaper);
 
         for (int i = 0; i < local_rule_count; i++) {
@@ -688,9 +691,10 @@ void UpdateProcessLimits(void) {
             }
         }
 
-        if (g_app.shaper && shaper_is_running(g_app.shaper)) {
-            shaper_reload_rules(g_app.shaper);
-        }
+        // only update the rate/burst parameters on existing buckets
+        // without any PID resolution or hash table manipulation
+        // that should happen only in RefreshProcessList()
+        shaper_refresh_rule_buckets(g_app.shaper);
     }
 
     // Free heap allocation
@@ -1214,7 +1218,7 @@ void ShowSetQuotaDialog(HWND hParent, int proc_idx, int pid_sub, bool is_in) {
 void ShowScheduleDialog(HWND hParent, int proc_idx) {
     if (proc_idx < 0 || proc_idx >= g_app.process_count) return;
     ProcessEntry *proc = &g_app.processes[proc_idx];
-    if (!proc->is_sticky) return;
+    //if (!proc->is_sticky) return;
 
     // Minimal DLGTEMPLATE with cx=cy=0.
     // The dialog manager creates the window at the OS default size;
@@ -1432,7 +1436,7 @@ void Sticky_Save(void) {
     }
 
     if (actual_sticky_count != 0) {
-        swprintf(buf, 64, L"%d", g_app.sticky_count);
+        swprintf(buf, sizeof(buf)/sizeof(wchar_t), L"%d", g_app.sticky_count);
         WritePrivateProfileStringW(S, L"Count", buf, cfg);
     }
 
@@ -1507,6 +1511,7 @@ int UpsertStickyProc(const wchar_t *raw_name, const wchar_t *path) {
     StickyEntry *se = &g_app.sticky_procs[g_app.sticky_count];
     memset(se, 0, sizeof(*se));
     wcsncpy(se->name, norm, MAX_PATH);
+    se->name[MAX_PATH-1] = L'\0'; // ensure null termination
     if (path) wcsncpy(se->path, path, MAX_PATH);
     se->is_sticky = true;  // New entries are sticky by default
     return g_app.sticky_count++;
@@ -1820,11 +1825,11 @@ BOOL onProcessListNotify(HWND hWnd, LPARAM lParam) {
                         pItem->pszText[0] = L'\0';
                         break;
                     }
-                    if (!proc->is_sticky) {
+                    /*if (!proc->is_sticky) {
                         // Schedule is only relevant for sticky processes
                         pItem->pszText[0] = L'\0';
                         break;
-                    }
+                    }*/
                     wchar_t sched_buf[SCHEDULE_STR_MAX];
                     schedule_formatw(&proc->schedule, sched_buf, SCHEDULE_STR_MAX);
                     if (sched_buf[0] == L'\0') {
@@ -1882,7 +1887,8 @@ BOOL onProcessListNotify(HWND hWnd, LPARAM lParam) {
             AppendMenuW(hMenu, MF_STRING, 11, L"Set Quota Out...");
             AppendMenuW(hMenu, MF_STRING, 12, L"Remove Quotas");
             // Schedule (sticky processes only, group row only)
-            if (!is_sub && proc->is_sticky) {
+            //if (!is_sub && proc->is_sticky) {
+            if (!is_sub && proc->pid_count > 1) {
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                 AppendMenuW(hMenu, MF_STRING, 20, L"Set Schedule...");
                 if (!schedule_is_empty(&proc->schedule))
@@ -2018,11 +2024,13 @@ BOOL onProcessListNotify(HWND hWnd, LPARAM lParam) {
                 InvalidateRect(g_app.hProcessList, NULL, FALSE);
                 break;
             case 20: // Set Schedule
-                if (!is_sub && proc->is_sticky)
+                //if (!is_sub && proc->is_sticky)
+                if (!is_sub)
                     ShowScheduleDialog(hWnd, dr->proc_idx);
                 break;
             case 21: // Remove Schedule
-                if (!is_sub && proc->is_sticky) {
+                //if (!is_sub && proc->is_sticky) {
+                if (!is_sub) {
                     schedule_init(&proc->schedule);
                     // Sync back to sticky registry
                     SyncStickyLimits(proc);
@@ -2099,9 +2107,10 @@ BOOL onProcessListNotify(HWND hWnd, LPARAM lParam) {
                 ShowSetQuotaDialog(hWnd, dr->proc_idx, dr->pid_sub, pAct->iSubItem == IDC_PL_QUOTA_IN);
                 return 0;
             } else if (pAct->iSubItem == IDC_PL_SCHEDULE) {
-                // Only allow editing schedule for sticky processes
+                // Edit schedule
                 ProcessEntry *proc = &g_app.processes[dr->proc_idx];
-                if (proc->is_sticky && dr->pid_sub < 0) {
+                //if (proc->is_sticky && dr->pid_sub < 0) {
+                if (dr->pid_sub < 0) {
                     ShowScheduleDialog(hWnd, dr->proc_idx);
                 }
                 return 0;

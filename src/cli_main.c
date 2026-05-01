@@ -164,9 +164,7 @@ static bool validate_args(const ParsedArgs *args) {
 // - Automatically removes rules when quotas are exceeded
 // - Logs quota breaches: "[quota] Process 'X' reached limit: IN 500.00/500.00 MB"
 // -----------------------------------------------------------------------
-static void sync_rules_to_shaper(ShaperInstance         *shaper,
-                                    struct RuleEntry *const rules_list,
-                                    bool                    quiet_mode) {
+static void sync_rules_to_shaper(ShaperInstance *shaper, struct RuleEntry *const rules_list, bool quiet_mode) {
     if (!shaper || !rules_list) return;
 
     int added = 0, removed = 0, quota_stopped = 0;
@@ -178,6 +176,7 @@ static void sync_rules_to_shaper(ShaperInstance         *shaper,
 
         // Check quota status if rule exists and has quotas
         bool quota_breached = false;
+
         if (exists && (e->quota_in > 0 || e->quota_out > 0)) {
             uint64_t total_dl = 0, total_ul = 0;
             if (shaper_get_process_traffic_by_name(shaper, e->identifier, &total_dl, &total_ul)) {
@@ -185,40 +184,50 @@ static void sync_rules_to_shaper(ShaperInstance         *shaper,
                     (e->quota_out > 0 && total_ul >= e->quota_out)) {
                     quota_breached = true;
 
-                    // Get current quota state to avoid duplicate logging
-                    uint64_t qi, qo;
-                    bool in_reached, out_reached;
-                    if (shaper_get_process_quota(shaper, e->identifier, &qi, &qo, &in_reached, &out_reached)) {
-                        if (!in_reached && !out_reached) {
-                            // First time detecting breach
-                            if (!quiet_mode) {
-                                printf("[quota] Process '%s' reached limit: ", e->identifier);
-                                if (e->quota_in > 0 && total_dl >= e->quota_in)
-                                    printf("IN %.2f/%.2f MB ", total_dl/1e6, e->quota_in/1e6);
-                                if (e->quota_out > 0 && total_ul >= e->quota_out)
-                                    printf("OUT %.2f/%.2f MB", total_ul/1e6, e->quota_out/1e6);
-                                printf(" - removing rule\n");
-                            }
-                        }
+                    // Log only once per process (track last_breach_logged per rule)
+                    if (!e->quota_breach_logged && !quiet_mode) {
+                        printf("[quota] Process '%s' reached limit: ", e->identifier);
+                        if (e->quota_in > 0 && total_dl >= e->quota_in)
+                            printf("IN %.2f/%.2f MB ", total_dl/1e6, e->quota_in/1e6);
+                        if (e->quota_out > 0 && total_ul >= e->quota_out)
+                            printf("OUT %.2f/%.2f MB", total_ul/1e6, e->quota_out/1e6);
+                        printf(" - removing rule\n");
+                        e->quota_breach_logged = true;
                     }
+                } else {
+                    e->quota_breach_logged = false;  // Reset if below quota again
                 }
             }
         }
 
         if (should_be_active && !quota_breached) {
             if (!exists) {
-                bool blocked = (e->dl_rate == 0.0 && e->ul_rate == 0.0);
+                // Quota-only or rate-limited: never block at creation
                 if (shaper_add_process_rule(shaper, e->identifier, e->dl_rate, e->ul_rate,
-                                            blocked, blocked, e->quota_in, e->quota_out, &e->schedule)) {
+                                            false, false,  // not blocked
+                                            e->quota_in, e->quota_out, &e->schedule)) {
                     shaper_set_process_quota(shaper, e->identifier, e->quota_in, e->quota_out);
+                    e->quota_breach_logged = false;
                     added++;
                 }
             }
         } else {
             if (exists) {
-                if (shaper_remove_process_rule(shaper, e->identifier)) {
+                if (quota_breached) {
+                    // Block the process completely instead of removing the rule
+                    shaper_remove_process_rule(shaper, e->identifier);
+                    if (shaper_add_process_rule(shaper, e->identifier, 0.0, 0.0,
+                                                true, true,  // dl_blocked, ul_blocked
+                                                e->quota_in, e->quota_out, &e->schedule)) {
+                        shaper_set_process_quota(shaper, e->identifier, e->quota_in, e->quota_out);
+                    }
                     removed++;
-                    if (quota_breached) quota_stopped++;
+                    quota_stopped++;
+                } else {
+                    // Schedule inactive - just remove the rule
+                    if (shaper_remove_process_rule(shaper, e->identifier)) {
+                        removed++;
+                    }
                 }
             }
         }
@@ -242,14 +251,13 @@ static bool register_rules(ShaperInstance *shaper, const ParsedArgs *args) {
         if (!schedule_is_empty(&e->schedule) && !schedule_is_active_now(&e->schedule))
             continue;
 
-        // A quota-only entry (no rate limits) is registered as blocked so traffic
-        // is intercepted and counted; shaper_set_process_quota then sets the cap.
-        bool blocked = (e->dl_rate == 0.0 && e->ul_rate == 0.0 &&
-                        (e->quota_in > 0 || e->quota_out > 0));
-
+        // Quota-only rules should not be blocked initially - traffic must flow
+        // to be counted against the quota. Only block when quota is reached.
+        // Pass dl_rate/ul_rate as 0 (unlimited) and blocked=false.
         if (!shaper_add_process_rule(shaper, e->identifier,
                                      e->dl_rate, e->ul_rate,
-                                     blocked, blocked, e->quota_in, e->quota_out, &e->schedule)) {
+                                     false, false,  // not blocked initially
+                                     e->quota_in, e->quota_out, &e->schedule)) {
             fprintf(stderr, "Error: failed to register rule for '%s'\n", e->identifier);
             return false;
         }
@@ -278,9 +286,11 @@ static bool do_hot_reload(ShaperInstance *shaper,
         return false;
     }
 
-    // Re-apply config file on top (same path as original invocation)
-    if (config_path) {
-        if (!load_config_file(config_path, &new_args)) {
+    // Re-apply config file on top.  If the user specified a new --config
+    // path during reload, it takes precedence over the original path.
+    const char *cfg_to_load = new_args.config_path ? new_args.config_path : config_path;
+    if (cfg_to_load) {
+        if (!load_config_file(cfg_to_load, &new_args)) {
             fprintf(stderr, "Warning: config file reload failed; using CLI values.\n");
         }
     }
@@ -297,24 +307,28 @@ static bool do_hot_reload(ShaperInstance *shaper,
         return false;
     }
 
-    bool ok = shaper_reload(shaper,
-                            &new_args.throttling,
-                            &new_args.process,
-                            new_args.download_rate,
-                            new_args.upload_rate,
-                            new_args.download_buffer_size,
-                            new_args.upload_buffer_size,
-                            new_args.max_tcp_connections,
-                            new_args.max_udp_packets_per_second,
-                            new_args.latency_ms,
-                            new_args.packet_loss,
-                            new_args.priority,
-                            new_args.burst_size,
-                            new_args.data_cap_bytes,
-                            new_args.quota_check_interval_ms,
-                            &new_args.global_schedule,
-                            new_args.quiet_mode,
-                            new_args.enable_statistics);
+    // Build configuration struct
+    ShaperConfig config;
+    shaper_config_init(&config);
+    config.params = &new_args.throttling;
+    config.processparams = &new_args.process;
+    config.download_rate = new_args.download_rate;
+    config.upload_rate = new_args.upload_rate;
+    config.download_buffer_size = new_args.download_buffer_size;
+    config.upload_buffer_size = new_args.upload_buffer_size;
+    config.max_tcp_connections = new_args.max_tcp_connections;
+    config.max_udp_packets_per_second = new_args.max_udp_packets_per_second;
+    config.latency_ms = new_args.latency_ms;
+    config.packet_loss = new_args.packet_loss;
+    config.priority = new_args.priority;
+    config.burst_size = new_args.burst_size;
+    config.data_cap_bytes = new_args.data_cap_bytes;
+    config.quota_check_interval_ms = new_args.quota_check_interval_ms;
+    config.global_schedule = &new_args.global_schedule;
+    config.quiet_mode = new_args.quiet_mode;
+    config.enable_statistics = new_args.enable_statistics;
+
+    bool ok = shaper_reload(shaper, &config);
 
     if (!ok) {
         fprintf(stderr, "Reload failed: %s\n", shaper_get_last_error(shaper));
@@ -334,6 +348,8 @@ int cli_run(int argc, char **argv) {
     // Rules list transferred from args before free; always NULL-initialised
     // so the cleanup path can unconditionally walk-and-free it.
     struct RuleEntry *rules_list = NULL;
+    bool args_needs_cleanup = true;  // owns heap data until proven otherwise
+
     // ------------------------------------------------------------------
     // 1. Ctrl+C handler
     // ------------------------------------------------------------------
@@ -428,24 +444,29 @@ int cli_run(int argc, char **argv) {
     // ------------------------------------------------------------------
     // 7. Start the core (worker thread spawned internally)
     // ------------------------------------------------------------------
-    if (!shaper_start(shaper,
-                      &args.throttling,
-                      &args.process,
-                      args.download_rate,
-                      args.upload_rate,
-                      args.download_buffer_size,
-                      args.upload_buffer_size,
-                      args.max_tcp_connections,
-                      args.max_udp_packets_per_second,
-                      args.latency_ms,
-                      args.packet_loss,
-                      args.priority,
-                      args.burst_size,
-                      args.data_cap_bytes,
-                      args.quota_check_interval_ms,
-                      &args.global_schedule,
-                      args.quiet_mode,
-                      args.enable_statistics)) {
+
+    // Build configuration struct
+    ShaperConfig config;
+    shaper_config_init(&config);
+    config.params = &args.throttling;
+    config.processparams = &args.process;
+    config.download_rate = args.download_rate;
+    config.upload_rate = args.upload_rate;
+    config.download_buffer_size = args.download_buffer_size;
+    config.upload_buffer_size = args.upload_buffer_size;
+    config.max_tcp_connections = args.max_tcp_connections;
+    config.max_udp_packets_per_second = args.max_udp_packets_per_second;
+    config.latency_ms = args.latency_ms;
+    config.packet_loss = args.packet_loss;
+    config.priority = args.priority;
+    config.burst_size = args.burst_size;
+    config.data_cap_bytes = args.data_cap_bytes;
+    config.quota_check_interval_ms = args.quota_check_interval_ms;
+    config.global_schedule = &args.global_schedule;
+    config.quiet_mode = args.quiet_mode;
+    config.enable_statistics = args.enable_statistics;
+
+    if (!shaper_start(shaper, &config)) {
         fprintf(stderr, "Failed to start: %s\n", shaper_get_last_error(shaper));
         exit_code = EXIT_FAILURE;
         goto cleanup_shaper;
@@ -453,7 +474,10 @@ int cli_run(int argc, char **argv) {
 
     // Capture fields needed by the main loop before potentially freeing args.
     bool quiet_mode = args.quiet_mode;
-    Schedule global_schedule = args.global_schedule;   // value copy
+    bool enable_statistics = args.enable_statistics;
+    unsigned int stats_interval_ms = args.stats_interval_ms;
+    Schedule global_schedule = args.global_schedule;
+    DWORD quota_check_interval = args.quota_check_interval_ms;
 
     // Print summary before transferring rules_list
     print_startup_summary(&args);
@@ -464,7 +488,7 @@ int cli_run(int argc, char **argv) {
     // the list and parsed_args_free will clean it up in the error path.
     rules_list = args.rules_head;
     args.rules_head = NULL;
-    bool args_needs_cleanup = false;  // args no longer need cleanup
+    args_needs_cleanup = false;  // args no longer need cleanup
 
     parsed_args_free(&args);  // Free what's left (non-rule fields)
 
@@ -474,7 +498,7 @@ int cli_run(int argc, char **argv) {
     bool reload_pending = false;
     bool quit_pending = false;
     DWORD last_schedule_tick = GetTickCount();
-    DWORD quota_check_interval = args.quota_check_interval_ms;
+    DWORD last_stats_tick = GetTickCount();    // Track last stats print
     static bool was_inside_global = true;      // Track global schedule state
     static bool first_global_check = true;     // First-run flag
 
@@ -510,14 +534,24 @@ int cli_run(int argc, char **argv) {
                     exit_code = EXIT_FAILURE;
                     break;
                 }
+                // Note: config_path doesn't get updated here. If the user specified
+                // a new --config, future reloads without --config will use the
+                // original path.
             }
             if (!(GetAsyncKeyState('R') & 0x8000)) {
                 reload_pending = false;
             }
         }
 
-        // Schedule + quota check
+        // PID map update (periodic, non-blocking)
         DWORD now_tick = GetTickCount();
+        static DWORD last_pid_update = 0;
+        if ((DWORD)(now_tick - last_pid_update) >= 1000) { // Check every second
+            last_pid_update = now_tick;
+            shaper_update_process_pids(shaper);
+        }
+
+        // Schedule + quota check
         if ((DWORD)(now_tick - last_schedule_tick) >= quota_check_interval) {
             last_schedule_tick = now_tick;
             bool need_sync = false;
@@ -557,6 +591,27 @@ int cli_run(int argc, char **argv) {
 
             if (need_sync)
                 sync_rules_to_shaper(shaper, rules_list, quiet_mode);
+        }
+
+        // Periodic statistics printing
+        if (enable_statistics && !quiet_mode) {
+            if ((DWORD)(now_tick - last_stats_tick) >= stats_interval_ms) {
+                last_stats_tick = now_tick;
+
+                ShaperStats stats;
+                shaper_get_stats(shaper, &stats);
+
+                printf("\rPackets: %llu | Dropped(rate): %llu | Dropped(loss): %llu | "
+                       "Delayed: %llu | Bytes: %.2f MB | Cap: %s\n",
+                       (unsigned long long)stats.packets_processed,
+                       (unsigned long long)stats.packets_dropped_rate_limit,
+                       (unsigned long long)stats.packets_dropped_loss,
+                       (unsigned long long)stats.packets_delayed,
+                       stats.bytes_processed / (1024.0 * 1024.0),
+                       stats.cap_reached ? "YES" : "no");
+
+                fflush(stdout);
+            }
         }
 
         Sleep(100);

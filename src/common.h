@@ -10,10 +10,14 @@
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
 
+#ifndef CLI_APP_BUILD
+#define CLI_APP_BUILD 1  // 1 = use for CLI app (default), 0 = GUI app
+#endif
+
 // -----------------------------------------------------------------------
 // App version number
 // -----------------------------------------------------------------------
-#define APP_VERSION L"V2.1a"
+#define APP_VERSION L"V2.2"
 
 // -----------------------------------------------------------------------
 // Windows headers
@@ -51,6 +55,7 @@
 #define DEFAULT_DL_BUFFER 150000
 #define DEFAULT_UL_BUFFER 150000
 #define DELAY_BUFFER_SIZE 8192
+#define QUOTA_CHECK_INTERVAL 1000   // ms
 #define STATS_UPDATE_INTERVAL 5000  // ms
 #define MAX_PROCESS_NAME_LEN 260
 

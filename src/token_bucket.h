@@ -24,6 +24,9 @@ void token_bucket_destroy(TokenBucket *bucket);
 // Replenish tokens based on elapsed time. Thread-safe.
 void token_bucket_update(TokenBucket *bucket);
 
+// Update the rate and burst of an existing token bucket without reallocating
+void token_bucket_update_rate(TokenBucket *bucket, double new_rate, int new_burst);
+
 // Returns true if the bucket currently has enough tokens for packet_size bytes.
 // Does NOT consume tokens.
 bool token_bucket_has_enough_tokens(TokenBucket *bucket, int packet_size);

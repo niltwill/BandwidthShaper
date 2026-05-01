@@ -169,8 +169,11 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
     unsigned int valid_count = 0;
 
     if (!get_valid_nic_indices(&valid_indices, &valid_count)) {
-        fprintf(stderr, "Failed to get valid network interface indices\n");
-        exit(EXIT_FAILURE);
+#if CLI_APP_BUILD
+        fprintf(stderr, "Failed to get valid network interface indices\n"); exit(EXIT_FAILURE);
+#else
+        return NULL;
+#endif
     }
 
     printf("Valid network interface indices: ");
@@ -181,7 +184,14 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
     printf("\n\n");
 
     char *copy = strdup(input);
-    if (!copy) { fprintf(stderr, "Memory allocation failed\n"); free(valid_indices); exit(EXIT_FAILURE); }
+    if (!copy) { 
+        free(valid_indices);
+#if CLI_APP_BUILD
+        fprintf(stderr, "Memory allocation failed\n"); exit(EXIT_FAILURE);
+#else
+        return NULL;
+#endif
+    }
 
     int capacity = 16;
     unsigned int *nic_indices = malloc(capacity * sizeof(unsigned int));
@@ -190,14 +200,19 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
     if (!nic_indices || !dl_limits || !ul_limits) {
         free(nic_indices); free(dl_limits); free(ul_limits);
         free(copy); free(valid_indices);
+#if CLI_APP_BUILD
         fprintf(stderr, "Memory allocation failed\n"); exit(EXIT_FAILURE);
+#else
+        return NULL;
+#endif
     }
 
     params->download_limits = dl_limits;
     params->upload_limits = ul_limits;
     params->nic_count = 0;
 
-    char *token = strtok(copy, ",");
+    char *outer_ctx = NULL;
+    char *token = strtok_s(copy, ",", &outer_ctx);
     while (token) {
         if ((int)params->nic_count >= capacity) {
             capacity *= 2;
@@ -208,7 +223,11 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
                 free(ti); free(td); free(tu);
                 free(nic_indices); free(params->download_limits); free(params->upload_limits);
                 free(copy); free(valid_indices);
+#if CLI_APP_BUILD
                 fprintf(stderr, "Memory reallocation failed\n"); exit(EXIT_FAILURE);
+#else
+                return NULL;
+#endif
             }
             nic_indices = ti;
             params->download_limits = td;
@@ -220,12 +239,17 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
             free(copy); free(nic_indices);
             free(params->download_limits); free(params->upload_limits);
             free(valid_indices);
+#if CLI_APP_BUILD
             fprintf(stderr, "Memory allocation failed\n"); exit(EXIT_FAILURE);
+#else
+            return NULL;
+#endif
         }
 
-        char *nic_part = strtok(entry, ":");
-        char *dl_part  = strtok(NULL,  ":");
-        char *ul_part  = strtok(NULL,  ":");
+        char *inner_ctx = NULL;
+        char *nic_part = strtok_s(entry, ":", &inner_ctx);
+        char *dl_part = strtok_s(NULL, ":", &inner_ctx);
+        char *ul_part = strtok_s(NULL, ":", &inner_ctx);
 
         if (!nic_part) {
             fprintf(stderr, "Invalid NIC format in token '%s'\n", token);
@@ -236,12 +260,18 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
 
         unsigned int nic_index = (unsigned int)atoi(nic_part);
         if (!is_valid_nic_index(nic_index, valid_indices, valid_count)) {
+#if CLI_APP_BUILD
             fprintf(stderr, "Error: NIC index %u is not valid or not operational.\n", nic_index);
             fprintf(stderr, "Use --list-nics to see available interfaces.\n");
+#endif
             free(entry); free(copy); free(nic_indices);
             free(params->download_limits); free(params->upload_limits);
             free(valid_indices);
-            exit(EXIT_FAILURE);
+#if CLI_APP_BUILD
+            exit(EXIT_FAILURE);  // cannot continue, no valid network interface to work with
+#else
+            return NULL;  // for GUI, let the caller handle it
+#endif
         }
 
         nic_indices[params->nic_count] = nic_index;
@@ -250,7 +280,7 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
         params->nic_count++;
         free(entry);
 
-        token = strtok(NULL, ",");
+        token = strtok_s(NULL, ",", &outer_ctx);
     }
 
     free(copy);
@@ -437,6 +467,7 @@ bool check_packet_rate_limit(ProcessParams *processparams,
                               CRITICAL_SECTION *lock,
                               const char *ip, UINT port,
                               int max_packets) {
+    if (max_packets <= 0) return true;
     char key[INET_ADDRSTRLEN + 7];
     snprintf(key, sizeof(key), "%s:%u", ip, port);
 
@@ -691,49 +722,46 @@ int parse_process_update_interval(const char *input, ProcessParams *processparam
 
 void update_pid_map(ProcessParams *processparams, PidTableCache *pid_cache) {
     (void)pid_cache; // Available for future use; not needed here
-
-    if (!processparams->process_list) return;
+    if (!processparams || !processparams->process_list) return;
 
     clock_t now = clock();
     double elapsed_ms = ((double)(now - processparams->last_update_time) / CLOCKS_PER_SEC) * 1000.0;
 
+    // Time-based check
     bool time_based = (processparams->time_threshold_ms > 0 && elapsed_ms >= processparams->time_threshold_ms);
-    bool packet_based = (processparams->packet_threshold > 0 && ++processparams->packet_count >= processparams->packet_threshold);
+
+    // Packet-based check: atomically check & reset counter
+    int current_packets = InterlockedCompareExchange(&processparams->packet_count, 0, processparams->packet_count);
+    bool packet_based = (processparams->packet_threshold > 0 && current_packets >= processparams->packet_threshold);
+
     double since_last = ((double)(now - processparams->last_actual_update) / CLOCKS_PER_SEC) * 1000.0;
 
-    if ((time_based || packet_based) && since_last >= processparams->min_update_interval_ms) {
-        processparams->last_actual_update = now;
-        processparams->packet_count = 0;
-        processparams->last_update_time = now;
-        processparams->needs_update = true;
-    }
+    if (!((time_based || packet_based) && since_last >= processparams->min_update_interval_ms)) return;
 
-    if (!processparams->needs_update) return;
-    processparams->needs_update = false;
+    processparams->last_actual_update = now;
+    processparams->last_update_time = now;
 
     // Remove dead PIDs
-    unsigned int map_sz = HASH_COUNT(processparams->pid_map);
-    PIDEntry **to_remove = malloc(map_sz * sizeof(PIDEntry *));
-    int remove_count = 0;
-
+    PIDEntry *dead_pids = NULL;
     PIDEntry *entry, *tmp;
     HASH_ITER(hh, processparams->pid_map, entry, tmp) {
-        if (!is_process_alive(entry->pid) && remove_count < 1024)
-            to_remove[remove_count++] = entry;
+        if (!is_process_alive(entry->pid)) {
+            HASH_DEL(processparams->pid_map, entry);
+            HASH_ADD(hh, dead_pids, pid, sizeof(int), entry);
+        }
     }
-    for (int i = 0; i < remove_count; i++) {
-        printf("Stale PID %u removed.\n", to_remove[i]->pid);
-        HASH_DEL(processparams->pid_map, to_remove[i]);
-        free(to_remove[i]);
+    if (dead_pids) {
+        free_pid_map_pool(dead_pids, &g_pid_pool);
     }
-    free(to_remove);
 
     // Add newly discovered PIDs
     char *list_copy = strdup(processparams->process_list);
-    if (!list_copy) { fprintf(stderr, "Memory allocation failed\n"); exit(EXIT_FAILURE); }
+    if (!list_copy) return;
     int proc_count = 0;
     char **procs = parse_processes(list_copy, &proc_count);
     free(list_copy);
+
+    if (!procs) return;
 
     for (int i = 0; i < proc_count; i++) {
         int *pid_list = NULL;
@@ -742,7 +770,6 @@ void update_pid_map(ProcessParams *processparams, PidTableCache *pid_cache) {
             HASH_FIND_INT(processparams->pid_map, &pid_list[j], entry);
             if (!entry && is_process_alive(pid_list[j])) {
                 add_pid_to_map_pool(&processparams->pid_map, pid_list[j], &g_pid_pool);
-                printf("Added PID %d for '%s'\n", pid_list[j], procs[i]);
             }
         }
         if (pid_list) free(pid_list);

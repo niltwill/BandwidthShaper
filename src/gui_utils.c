@@ -218,24 +218,28 @@ bool StartShaper(void) {
         process.time_threshold_ms = g_app.options.update_interval;
     }
 
-    bool ok = shaper_start(g_app.shaper,
-                          &throttling,
-                          &process,
-                          g_app.options.global_dl_limit,
-                          g_app.options.global_ul_limit,
-                          g_app.options.dl_buffer,
-                          g_app.options.ul_buffer,
-                          g_app.options.tcp_limit,
-                          g_app.options.udp_limit,
-                          g_app.options.latency,
-                          g_app.options.packet_loss,
-                          g_app.options.priority,
-                          g_app.options.burst_size,
-                          g_app.options.data_cap,
-                          15000,  // quota_check_interval_ms
-                          NULL,   // global_schedule
-                          false,  // quiet_mode
-                          true);  // enable_statistics
+    // Build configuration struct
+    ShaperConfig config;
+    shaper_config_init(&config);
+    config.params = &throttling;
+    config.processparams = &process;
+    config.download_rate = g_app.options.global_dl_limit;
+    config.upload_rate = g_app.options.global_ul_limit;
+    config.download_buffer_size = g_app.options.dl_buffer;
+    config.upload_buffer_size = g_app.options.ul_buffer;
+    config.max_tcp_connections = g_app.options.tcp_limit;
+    config.max_udp_packets_per_second = g_app.options.udp_limit;
+    config.latency_ms = g_app.options.latency;
+    config.packet_loss = g_app.options.packet_loss;
+    config.priority = g_app.options.priority;
+    config.burst_size = g_app.options.burst_size;
+    config.data_cap_bytes = g_app.options.data_cap;
+    config.quota_check_interval_ms = QUOTA_CHECK_INTERVAL;
+    config.global_schedule = NULL;
+    config.quiet_mode = false;
+    config.enable_statistics = true;
+
+    bool ok = shaper_start(g_app.shaper, &config);
 
     if (!ok) {
         char err[512];
@@ -302,24 +306,27 @@ bool ReloadShaperConfig(void) {
         process.time_threshold_ms = g_app.options.update_interval;
     }
 
-    bool ok = shaper_reload(g_app.shaper,
-                           &throttling,
-                           &process,
-                           g_app.options.global_dl_limit,
-                           g_app.options.global_ul_limit,
-                           g_app.options.dl_buffer,
-                           g_app.options.ul_buffer,
-                           g_app.options.tcp_limit,
-                           g_app.options.udp_limit,
-                           g_app.options.latency,
-                           g_app.options.packet_loss,
-                           g_app.options.priority,
-                           g_app.options.burst_size,
-                           g_app.options.data_cap,
-                           15000,  // quota_check_interval_ms
-                           NULL,   // global_schedule
-                           false,  // quiet_mode
-                           true);  // enable_statistics
+    ShaperConfig config;
+    shaper_config_init(&config);
+    config.params = &throttling;
+    config.processparams = &process;
+    config.download_rate = g_app.options.global_dl_limit;
+    config.upload_rate = g_app.options.global_ul_limit;
+    config.download_buffer_size = g_app.options.dl_buffer;
+    config.upload_buffer_size = g_app.options.ul_buffer;
+    config.max_tcp_connections = g_app.options.tcp_limit;
+    config.max_udp_packets_per_second = g_app.options.udp_limit;
+    config.latency_ms = g_app.options.latency;
+    config.packet_loss = g_app.options.packet_loss;
+    config.priority = g_app.options.priority;
+    config.burst_size = g_app.options.burst_size;
+    config.data_cap_bytes = g_app.options.data_cap;
+    config.quota_check_interval_ms = QUOTA_CHECK_INTERVAL;
+    config.global_schedule = NULL;
+    config.quiet_mode = false;
+    config.enable_statistics = true;
+
+    bool ok = shaper_reload(g_app.shaper, &config);
 
     if (ok) {
         UpdateProcessLimits();
@@ -421,6 +428,9 @@ void StopShaper(void) {
     shaper_stop(g_app.shaper);
     shaper_destroy(g_app.shaper);
     g_app.shaper = NULL;
+
+    // Stop the WinDivert service entirely
+    stop_windivert();
 }
 
 // ---------------------------------------------------------------------------
@@ -1532,6 +1542,10 @@ void Settings_Save(void) {
         }
         free(pAdapters);
 
+        if (wcslen(desc_list) > 65000) {
+            // Truncate to safe size
+            desc_list[65000] = L'\0';
+        }
         WritePrivateProfileStringW(S, L"SelectedNICs", desc_list, auth_path);
     }
 
@@ -1561,6 +1575,18 @@ void Settings_Save(void) {
 
     swprintf(buf, 512, L"%d", (int)g_app.current_unit);
     WritePrivateProfileStringW(S, L"DisplayUnit", buf, auth_path);
+
+    swprintf(buf, 512, L"%d", g_app.freq_idx);
+    WritePrivateProfileStringW(S, L"UpdateFrequency", buf, auth_path);
+
+    swprintf(buf, 512, L"%d", (int)g_app.proc_filter);
+    WritePrivateProfileStringW(S, L"ProcessFilter", buf, auth_path);
+
+    swprintf(buf, 512, L"%d", g_app.sort_column);
+    WritePrivateProfileStringW(S, L"SortColumn", buf, auth_path);
+
+    WritePrivateProfileStringW(S, L"SortAscending",
+                               g_app.sort_ascending ? L"1" : L"0", auth_path);
 
     WritePrivateProfileStringW(S, L"SaveStickyProcesses",
                                g_app.options.save_sticky_settings ? L"1" : L"0", auth_path);
@@ -1654,37 +1680,39 @@ void Settings_Load(void) {
         wchar_t *tok = wcstok_s(temp, L";", &ctx);
 
         while (tok) {
-            bool found = false;
+            // Skip empty tokens
+            if (tok[0] != L'\0') {
+                bool found = false;
 
-            if (adapters_ok) {
-                IP_ADAPTER_INFO *p = pAdapters;
-                while (p) {
-                    wchar_t desc[128];
-                    MultiByteToWideChar(CP_ACP, 0, p->Description, -1, desc, 128);
-                    if (_wcsicmp(desc, tok) == 0) {
-                        // Append numeric index to selected_nics (comma-separated).
-                        wchar_t entry[16];
-                        swprintf(entry, 16, L"%u", p->Index);
-                        if (g_app.options.selected_nics[0])
-                            wcsncat(g_app.options.selected_nics, L",",
+                if (adapters_ok) {
+                    IP_ADAPTER_INFO *p = pAdapters;
+                    while (p) {
+                        wchar_t desc[128];
+                        MultiByteToWideChar(CP_ACP, 0, p->Description, -1, desc, 128);
+                        if (_wcsicmp(desc, tok) == 0) {
+                            // Append numeric index to selected_nics (comma-separated).
+                            wchar_t entry[16];
+                            swprintf(entry, 16, L"%u", p->Index);
+                            if (g_app.options.selected_nics[0])
+                                wcsncat(g_app.options.selected_nics, L",",
+                                        255 - wcslen(g_app.options.selected_nics));
+                            wcsncat(g_app.options.selected_nics, entry,
                                     255 - wcslen(g_app.options.selected_nics));
-                        wcsncat(g_app.options.selected_nics, entry,
-                                255 - wcslen(g_app.options.selected_nics));
-                        found = true;
-                        break;
+                            found = true;
+                            break;
+                        }
+                        p = p->Next;
                     }
-                    p = p->Next;
+                }
+
+                if (!found) {
+                    // Record the first missing NIC name for a status-bar warning.
+                    if (!g_app.missing_nic_warning[0]) {
+                        swprintf(g_app.missing_nic_warning, 256,
+                                 L"Saved NIC not found: \"%s\" - check Options", tok);
+                    }
                 }
             }
-
-            if (!found) {
-                // Record the first missing NIC name for a status-bar warning.
-                if (!g_app.missing_nic_warning[0]) {
-                    swprintf(g_app.missing_nic_warning, 256,
-                             L"Saved NIC not found: \"%s\" - check Options", tok);
-                }
-            }
-
             tok = wcstok_s(NULL, L";", &ctx);
         }
 
@@ -1722,6 +1750,33 @@ void Settings_Load(void) {
             g_app.current_unit = (RateUnit)v;
         }
     }
+
+    GetPrivateProfileStringW(S, L"UpdateFrequency", L"-1", buf, 4, path);
+    {
+        int v = _wtoi(buf);
+        if (v >= 0 && v <= 5) {  // 0=Often through 5=Disabled
+            g_app.freq_idx = v;
+        }
+    }
+
+    GetPrivateProfileStringW(S, L"ProcessFilter", L"-1", buf, 4, path);
+    {
+        int v = _wtoi(buf);
+        if (v >= 0 && v < 3) {  // 0=All, 1=Sticky Only, 2=Running Only
+            g_app.proc_filter = (ProcFilter)v;
+        }
+    }
+
+    GetPrivateProfileStringW(S, L"SortColumn", L"-1", buf, 4, path);
+    {
+        int v = _wtoi(buf);
+        if (v >= 0 && v < 10) {  // Number of columns
+            g_app.sort_column = v;
+        }
+    }
+
+    GetPrivateProfileStringW(S, L"SortAscending", L"1", buf, 2, path);
+    g_app.sort_ascending = (buf[0] != L'0');
 }
 
 // ---------------------------------------------------------------------------
@@ -1740,7 +1795,8 @@ void PopulateNicList(HWND hDlg) {
     IP_ADAPTER_INFO* pAdapters = (IP_ADAPTER_INFO*)malloc(bufLen);
     if (!pAdapters) return;
 
-    if (GetAdaptersInfo(pAdapters, &bufLen) == NO_ERROR) {
+    DWORD result = GetAdaptersInfo(pAdapters, &bufLen);
+    if (result == NO_ERROR) {
         IP_ADAPTER_INFO* pAdapter = pAdapters;
         while (pAdapter) {
             // Format: "[Index] Description (IP)"
@@ -1821,6 +1877,10 @@ void FormatRateAuto(wchar_t* buf, size_t len, double rate_bps) {
 
 // For process list - uses user's selected unit strictly
 void FormatRateFixed(wchar_t* buf, size_t len, double rate_bps) {
+    if (isnan(rate_bps) || isinf(rate_bps)) {
+        swprintf(buf, len, L"N/A");
+        return;
+    }
     double val = rate_bps / UNIT_MULTIPLIERS[g_app.current_unit];
     swprintf(buf, len, L"%.2f %s", val, UNIT_LABELS[g_app.current_unit]);
 }
@@ -2117,12 +2177,13 @@ bool IsAnyQuotaExhausted(void) {
     return false;
 }
 
-// Returns true if at least one sticky process has a non-empty schedule.
+// Returns true if at least one process has a non-empty schedule.
 // Used to skip the TIMER_SCHEDULE_CHECK work entirely when nothing is configured.
 bool AnyScheduleActive(void) {
     for (int i = 0; i < g_app.process_count; i++) {
         const ProcessEntry *p = &g_app.processes[i];
-        if (p->is_sticky && !schedule_is_empty(&p->schedule))
+        //if (p->is_sticky && !schedule_is_empty(&p->schedule))
+        if (!schedule_is_empty(&p->schedule)) // make this possible for non-sticky processes too
             return true;
     }
     return false;
@@ -2148,7 +2209,8 @@ UINT ScheduleNextFireMs(void) {
 
     for (int i = 0; i < g_app.process_count; i++) {
         const ProcessEntry *p = &g_app.processes[i];
-        if (!p->is_sticky || !p->schedule.has_time) continue;
+        //if (!p->is_sticky || !p->schedule.has_time) continue;
+        if (!p->schedule.has_time) continue;
 
         int bounds[2] = { p->schedule.start_min, p->schedule.end_min };
         for (int b = 0; b < 2; b++) {
@@ -2221,13 +2283,21 @@ void LayoutMainWindow(HWND hWnd) {
 }
 
 void onTimer(HWND hWnd, WPARAM wParam) {
+    // reentrancy guard
+    static bool inTimer = false;
+    if (inTimer) return;
+    inTimer = true;
+
     if (wParam == TIMER_STATS_ID && g_app.shaper) {
         UpdateProcessRatesFromStats();
         UpdateStats();
         if (!g_app.pause_refresh) UpdateProcessList();
     } else if (wParam == TIMER_PROCESS_REFRESH) {
         RefreshProcessList();
-        if (g_app.shaper && shaper_is_running(g_app.shaper)) shaper_periodic_cleanup(g_app.shaper, 30, 15); // interval_seconds, max_age_seconds
+        if (g_app.shaper && shaper_is_running(g_app.shaper)) {
+            shaper_periodic_cleanup(g_app.shaper, 30, 15); // interval_seconds, max_age_seconds
+            shaper_update_process_pids(g_app.shaper);
+        }
     } else if (wParam == TIMER_SCHEDULE_CHECK) {
         // Re-evaluate schedule windows for all sticky processes and push
         // updated rules to the core if anything changed
@@ -2240,6 +2310,8 @@ void onTimer(HWND hWnd, WPARAM wParam) {
         // timer fires close to the exact minute a window opens or closes.
         RearmScheduleTimer(hWnd);
     }
+
+    inTimer = false;
 }
 
 // Convenience: kill then immediately re-arm TIMER_SCHEDULE_CHECK as a one-shot
@@ -2478,11 +2550,14 @@ LRESULT onCreate(HWND hWnd) {
     g_app.options.priority = 0;
     g_app.options.global_dl_limit = 0;
     g_app.options.global_ul_limit = 0;
+    
     g_app.current_unit = UNIT_KB;
     g_app.minimize_to_tray = false;
     g_app.options.save_settings = false;
     g_app.options.save_sticky_settings = false;
 
+    g_app.freq_idx = FREQ_DEFAULT_IDX;    // Default: Normal (2s)
+    g_app.proc_filter = PROC_FILTER_ALL;  // Default: Show All
     g_app.sort_column = 0;      // Default sort by Process name
     g_app.sort_ascending = true;
 
@@ -2498,6 +2573,20 @@ LRESULT onCreate(HWND hWnd) {
         PostMessage(hWnd, WM_APP_NIC_WARNING, 0, 0);  // handled later
     }
 
+    // Validate loaded values
+    if (g_app.freq_idx < 0 || g_app.freq_idx > 5) {
+        g_app.freq_idx = FREQ_DEFAULT_IDX;
+    }
+    if ((int)g_app.proc_filter < 0 || (int)g_app.proc_filter > 2) {
+        g_app.proc_filter = PROC_FILTER_ALL;
+    }
+    if (g_app.sort_column < 0 || g_app.sort_column > 9) {
+        g_app.sort_column = 0;
+    }
+    if ((int)g_app.current_unit < 0 || (int)g_app.current_unit >= UNIT_COUNT) {
+        g_app.current_unit = UNIT_KB;
+    }
+
     // Initialize process lock
     if (!InitializeCriticalSectionAndSpinCount(&g_app.process_lock, 4000)) {
         DestroyWindow(hWnd);
@@ -2507,8 +2596,9 @@ LRESULT onCreate(HWND hWnd) {
 
     // Initialize after Settings got loaded
     InitializeMainWindow(hWnd);
-    g_app.proc_filter = PROC_FILTER_ALL;
     ApplyProcFilter(g_app.proc_filter);  // Only after ListView
+
+
 
     // Try/catch-style protection for remaining initialization
     bool init_success = true;
@@ -2528,10 +2618,10 @@ LRESULT onCreate(HWND hWnd) {
     }
 
     // Start timers
-    g_app.freq_idx = FREQ_DEFAULT_IDX;
     ApplyUpdateFrequency(g_app.freq_idx);
     if (!SetTimer(hWnd, TIMER_SCHEDULE_CHECK, ScheduleNextFireMs(), NULL)) {
-        init_success = false;
+        // Don't fail completely, because the schedule timer is non-critical
+        //init_success = false;
     }
 
     if (g_app.minimize_to_tray) TrayAdd(hWnd);

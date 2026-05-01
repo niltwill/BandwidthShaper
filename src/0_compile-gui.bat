@@ -10,6 +10,9 @@ set FILES=gui_main.c gui_utils.c gui_proc_list.c gui_dialogs.c args_parser.c sha
 :: Linker settings
 set LINKER=ws2_32.lib Advapi32.lib Kernel32.lib User32.lib iphlpapi.lib gdi32.lib shell32.lib comctl32.lib comdlg32.lib ole32.lib version.lib uxtheme.lib
 
+:: Compile flags
+set COMPILE_FLAGS=-DCLI_APP_BUILD=0
+
 :: WinDivert libs
 set WINDIVERT_X86=external\lib\X86\WinDivert.lib
 set WINDIVERT_X64=external\lib\X64\WinDivert64.lib
@@ -45,6 +48,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 cl /EHsc /std:c17 /TC ^
+    %COMPILE_FLAGS% ^
     /DUNICODE /D_UNICODE %FILES% ^
     /link /out:%REL_X86% ^
     %WINDIVERT_X86% %LINKER% ^
@@ -75,6 +79,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 cl /EHsc /std:c17 /TC ^
+    %COMPILE_FLAGS% ^
     /DUNICODE /D_UNICODE %FILES% ^
     /link /out:%REL_X64% ^
     %WINDIVERT_X64% %LINKER% ^
@@ -105,6 +110,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 cl /EHsc /std:c17 /TC ^
+    %COMPILE_FLAGS% ^
     /DUNICODE /D_UNICODE %FILES% ^
     /link /out:%REL_ARM64% ^
     %WINDIVERT_ARM64% %LINKER% ^

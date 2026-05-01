@@ -49,6 +49,7 @@ typedef struct {
     void *udp6_table;
     LONGLONG last_refresh_ticks;
     LONGLONG ttl_ticks;   // How long the cache stays valid
+    CRITICAL_SECTION lock;
 } PidTableCache;
 
 // ------------------------------------------------------------------
@@ -60,6 +61,8 @@ bool pid_pool_init_once(PIDEntryPool *pool, int initial_size);
 bool pid_pool_init(PIDEntryPool *pool, int initial_size);
 
 // Clean up the pool
+// IMPORTANT: Must be called only when no other threads are using the pool.
+// All alloc/free operations must be complete before calling this.
 void pid_pool_cleanup(PIDEntryPool *pool);
 
 // Allocate a PID entry from the pool
