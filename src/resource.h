@@ -86,21 +86,63 @@
 #define IDC_OPT_SNAPSHOT_DIR         3023
 #define IDC_OPT_SNAPSHOT_DIR_BROWSE  3024
 
+// Options dialog - unique IDs
+#define IDC_OPT_GRP_GLOBAL_LIMITS   3100
+#define IDC_OPT_LBL_DOWNLOAD        3101
+#define IDC_OPT_LBL_DL_UNLIMITED    3102
+#define IDC_OPT_LBL_UPLOAD          3103
+#define IDC_OPT_LBL_UL_UNLIMITED    3104
+#define IDC_OPT_LBL_DATA_CAP        3105
+#define IDC_OPT_LBL_DATA_CAP_UNLIM  3106
+#define IDC_OPT_GRP_NIC_INTERFACES  3107
+#define IDC_OPT_LBL_NIC_SELECTED    3108
+#define IDC_OPT_GRP_BUFFER_SETTINGS 3109
+#define IDC_OPT_LBL_DL_BUFFER       3110
+#define IDC_OPT_LBL_BYTES           3111
+#define IDC_OPT_LBL_UL_BUFFER       3112
+#define IDC_OPT_LBL_BYTES2          3113
+#define IDC_OPT_LBL_BURST_SIZE      3114
+#define IDC_OPT_LBL_BURST_AUTO      3115
+#define IDC_OPT_GRP_UPDATE_INTERVAL 3116
+#define IDC_OPT_LBL_UPDATE_EVERY    3117
+#define IDC_OPT_LBL_COOLDOWN        3118
+#define IDC_OPT_LBL_MS              3119
+#define IDC_OPT_GRP_ADVANCED        3120
+#define IDC_OPT_LBL_TCP_LIMIT       3121
+#define IDC_OPT_LBL_TCP_UNLIM       3122
+#define IDC_OPT_LBL_UDP_LIMIT       3123
+#define IDC_OPT_LBL_UDP_UNLIM       3124
+#define IDC_OPT_LBL_LATENCY         3125
+#define IDC_OPT_LBL_MS2             3126
+#define IDC_OPT_LBL_PACKET_LOSS     3127
+#define IDC_OPT_LBL_PERCENT         3128
+#define IDC_OPT_LBL_PRIORITY        3129
+#define IDC_OPT_GRP_LANGUAGE        3130
+#define IDC_OPT_LBL_LANGUAGE        3131
+#define IDC_OPT_LANGUAGE            3132
+#define IDC_OPT_GRP_BEHAVIOR        3133
+#define IDC_OPT_GRP_FILE_PATHS      3134
+#define IDC_OPT_LBL_CONFIG_FOLDER   3135
+#define IDC_OPT_LBL_CONFIG_HINT     3136
+#define IDC_OPT_LBL_SNAPSHOT_FOLDER 3137
+#define IDC_OPT_LBL_SNAPSHOT_HINT   3138
+
 // "Specify process" input dialog
 #define IDD_SPECIFY_PROC        105
 #define IDC_SPECIFY_NAME        6001
+#define IDC_SPECIFY_PROMPT      6002
 
 // Stats dialog controls
-#define IDC_STATIC_DL_LABEL         4001
-#define IDC_STATIC_UL_LABEL         4002
-#define IDC_STATIC_PROC_LIST_LABEL  4003
-#define IDC_STATIC_STATS_LABEL      4004
+#define IDC_STATS_LBL_DL_HISTORY    4001
+#define IDC_STATS_LBL_UL_HISTORY    4002
+#define IDC_STATS_LBL_PROC_TRAFFIC  4003
+#define IDC_STATS_LBL_STATS         4004
 #define IDC_STATS_DL_CHART          4005
 #define IDC_STATS_UL_CHART          4006
 #define IDC_STATS_PROC_LIST         4007
 #define IDC_STATS_TEXT              4008
-#define IDC_STATS_SAVE              4009
-#define IDC_STATS_RESET             4010
+#define IDC_STATS_BTN_SAVE          4009
+#define IDC_STATS_BTN_RESET         4010
 
 // Tray
 #define IDI_TRAY_ICON       5000

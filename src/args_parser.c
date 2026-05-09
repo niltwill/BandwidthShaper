@@ -5,6 +5,7 @@
 #include "args_parser.h"
 #include "shaper_utils.h"
 #include "schedule.h"
+#include "localization_api.h"
 
 // -----------------------------------------------------------------------
 // ParsedArgs lifecycle
@@ -56,7 +57,7 @@ static bool append_rule(ParsedArgs *args, const char *identifier,
                         uint64_t quota_in, uint64_t quota_out,
                         const Schedule *schedule) {
     struct RuleEntry *e = malloc(sizeof(struct RuleEntry));
-    if (!e) { fprintf(stderr, "OOM appending rule\n"); return false; }
+    if (!e) { fprintf(stderr, C(CLI_OOM_RULE)); return false; }
 
     strncpy(e->identifier, identifier, sizeof(e->identifier) - 1);
     e->identifier[sizeof(e->identifier) - 1] = '\0';
@@ -88,7 +89,7 @@ static bool append_rule(ParsedArgs *args, const char *identifier,
 
 static bool parse_rule_string(const char *rules_str, ParsedArgs *args) {
     char *copy = strdup(rules_str);
-    if (!copy) { fprintf(stderr, "OOM in parse_rule_string\n"); return false; }
+    if (!copy) { fprintf(stderr, C(CLI_OOM_RULE_STRING)); return false; }
 
     bool ok = true;
     char *outer_ctx = NULL;
@@ -105,7 +106,7 @@ static bool parse_rule_string(const char *rules_str, ParsedArgs *args) {
         char *extra = strtok_s(NULL, " \t", &inner_ctx);
 
         if (!identifier || !dl_str || !ul_str || extra) {
-            fprintf(stderr, "Invalid --rule format: '%s'\n", tok);
+            fprintf(stderr, C(CLI_ERR_RULE_FORMAT), tok);
             ok = false;
         } else {
             double dl = parse_rate_with_units(dl_str);
@@ -130,7 +131,7 @@ bool parse_args(int argc, char **argv, ParsedArgs *args) {
 #define NEXT_ARG(flag) \
         do { \
             if (i + 1 >= argc) { \
-                fprintf(stderr, "Error: %s requires an argument.\n", flag); \
+                fprintf(stderr, C(CLI_ERR_ARG_REQUIRES), flag); \
                 return false; \
             } \
             i++; \
@@ -165,7 +166,7 @@ bool parse_args(int argc, char **argv, ParsedArgs *args) {
             free(args->process.process_list);
             args->process.process_list = strdup(argv[i]);
             if (!args->process.process_list) {
-                fprintf(stderr, "OOM storing process list\n"); return false;
+                fprintf(stderr, C(CLI_OOM_PROCESS_LIST)); return false;
             }
 
         } else if ((strcmp(argv[i], "--pid") == 0 || strcmp(argv[i], "-z") == 0)) {
@@ -185,7 +186,7 @@ bool parse_args(int argc, char **argv, ParsedArgs *args) {
             NEXT_ARG("--burst");
             args->burst_size = (int)parse_rate_with_units(argv[i]);
             if (args->burst_size <= 0) {
-                fprintf(stderr, "Warning: burst size must be positive; ignoring.\n");
+                fprintf(stderr, C(CLI_ERR_BURST_POSITIVE));
                 args->burst_size = 0;
             }
 
@@ -194,12 +195,12 @@ bool parse_args(int argc, char **argv, ParsedArgs *args) {
             char   *endptr;
             double  value = strtod(argv[i], &endptr);
             if (value <= 0) {
-                fprintf(stderr, "Error: --disable-after value must be positive.\n");
+                fprintf(stderr, C(CLI_ERR_DISABLE_AFTER_POS));
             } else if (*endptr != '\0') {
                 if      (_stricmp(endptr, "GB") == 0) args->data_cap_bytes = (uint64_t)(value * 1e9);
                 else if (_stricmp(endptr, "MB") == 0) args->data_cap_bytes = (uint64_t)(value * 1e6);
                 else if (_stricmp(endptr, "KB") == 0) args->data_cap_bytes = (uint64_t)(value * 1e3);
-                else    fprintf(stderr, "Invalid unit for --disable-after (use GB, MB, KB).\n");
+                else    fprintf(stderr, C(CLI_ERR_DISABLE_AFTER_UNIT));
             } else {
                 args->data_cap_bytes = (uint64_t)(value * 1e9); // default: GB
             }
@@ -216,7 +217,7 @@ bool parse_args(int argc, char **argv, ParsedArgs *args) {
             args->priority = atoi(argv[i]);
             if (args->priority < WINDIVERT_PRIORITY_LOWEST ||
                 args->priority > WINDIVERT_PRIORITY_HIGHEST) {
-                fprintf(stderr, "Error: Priority must be between %d and %d.\n",
+                fprintf(stderr, C(CLI_ERR_PRIORITY_RANGE),
                         WINDIVERT_PRIORITY_LOWEST, WINDIVERT_PRIORITY_HIGHEST);
                 return false;
             }
@@ -233,14 +234,26 @@ bool parse_args(int argc, char **argv, ParsedArgs *args) {
             NEXT_ARG("--nic");
             args->throttling.nic_indices = parse_nic_indices(argv[i], &args->throttling);
             if (!args->throttling.nic_indices) {
-                fprintf(stderr, "Error: failed to parse NIC indices.\n");
+                fprintf(stderr, C(CLI_ERR_NIC_PARSE));
                 return false;
             }
 
-        } else if ((strcmp(argv[i], "--list-nics") == 0 || strcmp(argv[i], "-l") == 0)) {
+        } else if ((strcmp(argv[i], "--list-nics") == 0 || strcmp(argv[i], "-A") == 0)) {
             list_network_interfaces();
             args->early_exit = true;
             return true;
+
+        } else if ((strcmp(argv[i], "--lang") == 0 || strcmp(argv[i], "-l") == 0)) {
+            NEXT_ARG("--lang");
+            if (_stricmp(argv[i], "en") == 0 || _stricmp(argv[i], "english") == 0) {
+                loc_set_language(LOC_LANG_EN);
+            } else if (_stricmp(argv[i], "hu") == 0 || _stricmp(argv[i], "hungarian") == 0) {
+                loc_set_language(LOC_LANG_HU);
+            } else {
+                fprintf(stderr, C(CLI_ERR_UNKNOWN_ARG), argv[i]);
+                print_help(argv[0]);
+                return false;
+            }
 
         } else if ((strcmp(argv[i], "--statistics") == 0 || strcmp(argv[i], "-s") == 0)) {
             args->enable_statistics = true;
@@ -264,7 +277,7 @@ bool parse_args(int argc, char **argv, ParsedArgs *args) {
             // inbound or outbound traffic reaches the cap, its rules are removed.
             // Uses the same rate-with-units parser as -d/-u so "1GB", "500MB" etc. work.
             if (i + 3 >= argc) {
-                fprintf(stderr, "Error: --stop-at requires three arguments: <process|PID> <QUOTA_IN> <QUOTA_OUT>\n");
+                fprintf(stderr, C(CLI_ERR_STOP_AT_ARGS));
                 return false;
             }
             const char *identifier = argv[++i];
@@ -285,9 +298,7 @@ bool parse_args(int argc, char **argv, ParsedArgs *args) {
             Schedule sched;
             schedule_init(&sched);
             if (!schedule_parse(argv[i], &sched)) {
-                fprintf(stderr, "Error: invalid --schedule format '%s'\n"
-                                "       Expected: [HHMM-HHMM][~<days>]  e.g. 0800-1800~1-5\n",
-                        argv[i]);
+                fprintf(stderr, C(CLI_ERR_SCHEDULE_FORMAT), argv[i]);
                 return false;
             }
             // Stamp onto last RuleEntry if one exists, otherwise set global schedule
@@ -304,7 +315,7 @@ bool parse_args(int argc, char **argv, ParsedArgs *args) {
             NEXT_ARG("--quota-check-interval");
             args->quota_check_interval_ms = (unsigned int)atoi(argv[i]);
             if (args->quota_check_interval_ms < 1000) {
-                fprintf(stderr, "Warning: quota check interval too low (%u ms), minimum 1000 ms recommended\n", 
+                fprintf(stderr, C(CLI_WARN_QUOTA_INTERVAL),
                         args->quota_check_interval_ms);
             }
 
@@ -313,7 +324,7 @@ bool parse_args(int argc, char **argv, ParsedArgs *args) {
             NEXT_ARG("--stats-interval");
             args->stats_interval_ms = (unsigned int)atoi(argv[i]);
             if (args->stats_interval_ms < 500) {
-                fprintf(stderr, "Warning: stats interval too low (%u ms), minimum 500 ms recommended\n",
+                fprintf(stderr, C(CLI_WARN_STATS_INTERVAL),
                         args->stats_interval_ms);
                 args->stats_interval_ms = 500;
             }
@@ -323,7 +334,7 @@ bool parse_args(int argc, char **argv, ParsedArgs *args) {
             args->config_path = argv[i]; // points into argv - not owned
 
         } else {
-            fprintf(stderr, "Unknown or invalid argument: %s\n", argv[i]);
+            fprintf(stderr, C(CLI_ERR_UNKNOWN_ARG), argv[i]);
             print_help(argv[0]);
             return false;
         }
@@ -490,7 +501,7 @@ static bool apply_config_value(const char *key, const char *value,
     if (strcmp(key, "stop-at") == 0 || strcmp(key, "stop_at") == 0) {
         char *value_copy = strdup(value);
         if (!value_copy) {
-            fprintf(stderr, "OOM processing config value for '%s'\n", key);
+            fprintf(stderr, C(CLI_OOM_CONFIG_VAL), key);
             return false;
         }
 
@@ -502,8 +513,7 @@ static bool apply_config_value(const char *key, const char *value,
 
         bool ok = true;
         if (!identifier || !quota_in || !quota_out || extra) {
-            fprintf(stderr, "Error in config: '%s' requires 3 values: "
-                            "<process|PID> <QUOTA_IN> <QUOTA_OUT>\n", key);
+            fprintf(stderr, C(CLI_ERR_STOP_AT_CONF), key);
             ok = false;
         } else {
             char *fake_argv[5] = { program_name, "--stop-at", identifier, quota_in, quota_out };
@@ -546,6 +556,7 @@ static bool apply_config_value(const char *key, const char *value,
              strcmp(key, "quota_check_interval")   == 0) flag = "--quota-check-interval";
     else if (strcmp(key, "stats-interval")         == 0 ||
              strcmp(key, "stats_interval")         == 0) flag = "--stats-interval";
+    else if (strcmp(key, "lang")                   == 0) flag = "--lang";
 
     // Build a synthetic 3-element argv: {"<cfg>", flag, value}
     char *fake_argv[3] = { program_name, (char *)flag, (char *)value };
@@ -559,7 +570,7 @@ static bool apply_config_value(const char *key, const char *value,
 bool load_config_file(const char *path, ParsedArgs *args) {
     FILE *fp = fopen(path, "r");
     if (!fp) {
-        fprintf(stderr, "Error: Cannot open config file '%s'\n", path);
+        fprintf(stderr, C(CLI_ERR_CONFIG_OPEN), path);
         return false;
     }
 
@@ -587,7 +598,7 @@ bool load_config_file(const char *path, ParsedArgs *args) {
         for (char *p = key; *p; p++) *p = (char)tolower((unsigned char)*p);
 
         if (!apply_config_value(key, value, args)) {
-            fprintf(stderr, "Error in config file '%s' near line %d: bad value for '%s'\n",
+            fprintf(stderr, C(CLI_ERR_CONFIG_BAD_VALUE),
                     path, line_num, key);
             success = false;
             break;
@@ -603,42 +614,42 @@ bool load_config_file(const char *path, ParsedArgs *args) {
 // -----------------------------------------------------------------------
 
 void print_version(void) {
-    wprintf(L"Version: %s\n", APP_VERSION);
+    printf(C(CLI_VERSION_FMT), APP_VERSION_A);
 }
 
 void print_help(const char *program_path) {
     char name[MAX_PATH];
     get_program_name_r(program_path, name, sizeof(name));
-    printf("Usage: %s [OPTIONS]\n", name);
-    printf("Options:\n");
-    printf("  -C, --config <path>                           Load configuration from INI-style file (overrides CLI arguments)\n");
-    printf("  -P, --priority <NUM>                          Set WinDivert priority (default: 0, range: %d to %d)\n",
-           WINDIVERT_PRIORITY_LOWEST, WINDIVERT_PRIORITY_HIGHEST);
-    printf("  -p, --process <process1,process2,...>         List of process names to monitor (comma-separated)\n");
-    printf("  -z, --pid <pidnum1,pidnum2,...>               List of PIDs to monitor (comma-separated)\n");
-    printf("  -c, --rule <process|PID> <DL_RATE> <UL_RATE>  Set custom rate limit(s) for a process or PID\n");
-    printf("  -S, --stop-at <process|PID> <QI> <QO>         Set inbound/outbound data quota for a process or PID\n");
-    printf("                                                  Quota values accept units: b, KB, MB, GB (e.g. 500MB)\n");
-    printf("  -T, --schedule [HHMM-HHMM][~<days>]           Restrict preceding -p/-z/-c/-S to a time/day window\n");
-    printf("                                                  Days: 1=Mon..7=Sun; ranges (1-5) and lists (1,3,5) OK\n");
-    printf("                                                  Examples: 0800-1800~1-5  2200-0600~6,7\n");
-    printf("  -Q, --quota-check-interval <ms>               How often to check quotas/schedules (default: 15000ms)\n");
-    printf("  -I, --stats-interval <ms>                     How often to print statistics (default: %dms, requires -s)\n", STATS_UPDATE_INTERVAL);
-    printf("  -i, --process-update-interval <NUM>[p|t][,c]  Packet/time threshold for PID refresh + optional cooldown\n");
-    printf("  -a, --disable-after <RATE>[KB|MB|GB]          Disable internet after reaching data cap (0 = no cap)\n");
-    printf("  -d, --download <RATE>[b|Kb|KB|Mb|MB|Gb|GB]    Download speed limit per second (default unit: KB)\n");
-    printf("  -u, --upload <RATE>[b|Kb|KB|Mb|MB|Gb|GB]      Upload speed limit per second (default unit: KB)\n");
-    printf("  -D, --download-buffer <bytes>                 Max download buffer size in bytes (default: %d)\n", DEFAULT_DL_BUFFER);
-    printf("  -U, --upload-buffer <bytes>                   Max upload buffer size in bytes (default: %d)\n", DEFAULT_UL_BUFFER);
-    printf("  -t, --tcp-limit <NUM>                         Max active TCP connections (0 = unlimited)\n");
-    printf("  -r, --udp-limit <NUM>                         Max UDP packets/sec (0 = unlimited)\n");
-    printf("  -b, --burst <RATE>[b|Kb|KB|Mb|MB|Gb|GB]       Burst size override (0 = use buffer size)\n");
-    printf("  -L, --latency <ms>                            Simulated latency in ms (0 = none)\n");
-    printf("  -m, --packet-loss <float>                     Simulated packet loss %% (0.00 = none)\n");
-    printf("  -n, --nic <index>[:<DL>:<UL>][,...]           NIC index(es) to throttle; optional per-NIC rates\n");
-    printf("  -l, --list-nics                               List all available network interfaces\n");
-    printf("  -s, --statistics                              Enable periodic statistics output\n");
-    printf("  -q, --quiet                                   Suppress most console messages\n");
-    printf("  -v, --version                                 Display version and exit\n");
-    printf("  -h, --help                                    Display this help and exit\n");
+    printf(C(CLI_USAGE), name);
+    printf(C(CLI_OPTIONS_HEADER));
+    printf(C(CLI_HELP_CONFIG));
+    printf(C(CLI_HELP_LANG));
+    printf(C(CLI_HELP_PRIORITY), WINDIVERT_PRIORITY_LOWEST, WINDIVERT_PRIORITY_HIGHEST);
+    printf(C(CLI_HELP_PROCESS));
+    printf(C(CLI_HELP_PID));
+    printf(C(CLI_HELP_RULE));
+    printf(C(CLI_HELP_STOP_AT));
+    printf(C(CLI_HELP_STOP_AT_CONT));
+    printf(C(CLI_HELP_SCHEDULE));
+    printf(C(CLI_HELP_SCHEDULE_DAYS));
+    printf(C(CLI_HELP_SCHEDULE_EX));
+    printf(C(CLI_HELP_QUOTA_INTERVAL), QUOTA_CHECK_INTERVAL);
+    printf(C(CLI_HELP_STATS_INTERVAL), STATS_UPDATE_INTERVAL);
+    printf(C(CLI_HELP_PROC_INTERVAL));
+    printf(C(CLI_HELP_DISABLE_AFTER));
+    printf(C(CLI_HELP_DOWNLOAD));
+    printf(C(CLI_HELP_UPLOAD));
+    printf(C(CLI_HELP_DL_BUFFER), DEFAULT_DL_BUFFER);
+    printf(C(CLI_HELP_UL_BUFFER), DEFAULT_UL_BUFFER);
+    printf(C(CLI_HELP_TCP_LIMIT));
+    printf(C(CLI_HELP_UDP_LIMIT));
+    printf(C(CLI_HELP_BURST));
+    printf(C(CLI_HELP_LATENCY));
+    printf(C(CLI_HELP_PACKET_LOSS));
+    printf(C(CLI_HELP_NIC));
+    printf(C(CLI_HELP_LIST_NICS));
+    printf(C(CLI_HELP_STATISTICS));
+    printf(C(CLI_HELP_QUIET));
+    printf(C(CLI_HELP_VERSION));
+    printf(C(CLI_HELP_HELP));
 }

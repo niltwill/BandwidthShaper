@@ -35,6 +35,9 @@ bool IsUserAdmin(void);
 bool RelaunchAsAdmin(void);
 
 // Initialize main window
+void InitUnitLabels(void);             // must be called after loc_set_language()
+void ApplyRCMenuStrings(HWND hWnd);    // apply locale strings to main menu bar
+void ApplyLanguageChange(HWND hOptionsDlg);
 void InitializeMainWindow(HWND hWnd);
 void CreateStatusBar(HWND hWnd);
 
@@ -102,6 +105,7 @@ void ApplyUpdateFrequency(int idx);
 bool IsAnyQuotaExhausted(void);
 bool AnyScheduleActive(void);
 UINT ScheduleNextFireMs(void);
+int MeasureButtonTextWidth(HWND hBtn, int padding);
 
 // Layout
 void LayoutMainWindow(HWND hWnd);

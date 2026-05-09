@@ -5,13 +5,13 @@ setlocal
 set VS_VER=0
 
 :: Files to compile
-set FILES=cli_main.c args_parser.c shaper_core.c shaper_utils.c schedule.c token_bucket.c pid_cache.c 
+set FILES=localization_api.c localization_data.c cli_main.c args_parser.c shaper_core.c shaper_utils.c schedule.c token_bucket.c pid_cache.c
 
 :: Linker settings
 set LINKER=ws2_32.lib Advapi32.lib Kernel32.lib User32.lib iphlpapi.lib
 
 :: Compile flags
-set COMPILE_FLAGS=-DCLI_APP_BUILD=1
+set COMPILE_FLAGS=-DCLI_APP_BUILD=1 -DUNICODE /D_UNICODE /utf-8
 
 :: WinDivert libs
 set WINDIVERT_X86=external\lib\X86\WinDivert.lib

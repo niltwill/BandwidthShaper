@@ -64,6 +64,11 @@ enum {
     COL_COUNT
 };
 
+// Column sizing
+int GetProcessListColumnWidth(int col, bool include_sort_arrow);
+void AutoSizeProcessListColumns(void);
+void AutoSizeProcessListColumn(int col, bool userTriggered);
+
 // Initialization
 void CreateProcessList(HWND hParent);
 void InitProcessListColumns(void);
@@ -116,6 +121,7 @@ LRESULT CALLBACK CellEditSubclassProc(HWND hWnd, UINT msg,
 // Process function helpers
 void UpdateProcessList(void);
 int CompareProcessEntry(const void* a, const void* b);
+void RefreshProcessListColumns(void);
 // Unused function
 //void UpdateProcessLimitForRow(int proc_idx, int pid_sub, bool is_dl, double new_limit);
 

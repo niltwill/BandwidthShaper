@@ -1,0 +1,308 @@
+"Failed to initialize COM",
+"This program requires administrator privileges to work.\n\n"
+"Would you like to try to elevate it?",
+"Administrator Rights Required",
+"Failed to obtain administrator privileges.\n"
+"The program will now exit.",
+"Failed to register window class",
+"Failed to create window",
+
+"Process",
+"PID",
+"Download",
+"Upload",
+"DL Limit",
+"UL Limit",
+"Quota In",
+"Quota Out",
+"Schedule",
+"Actions",
+"Warning: Process has more than %u instances, some ignored\n",
+"%d processes (%d instances)",
+"Set Quota",
+"Quotas can only be set on the process group level, not on individual PIDs.",
+"Executables (*.exe)\0*.exe\0All Files (*.*)\0*.*\0",
+"Locate Process Executable",
+"Locate Process",
+"Sticky process list is full (max %d).",
+"Sticky entry added: %s",
+"Specify Process",
+"Remove Sticky Entry",
+"The selected process is not a sticky entry.\n\n"
+"Right-click a running process and choose \x201CPin as sticky \u25CC\x201D "
+"to make it persistent, or use File \x203A Locate / Specify process.",
+"Remove sticky entry for \"%s\"?\n\n"
+"Saved limits will be discarded. "
+"If the process is currently running it will stay in the list until it exits.",
+"Sorted by %s (%s)",
+"ascending",
+"descending",
+"%d inst.",
+"Blocked",
+"[Limited]",
+"Set Download Limit...",
+"Set Upload Limit...",
+"Remove Limits",
+"Block Process",
+"Set Quota In...",
+"Set Quota Out...",
+"Remove Quotas",
+"Set Schedule...",
+"Remove Schedule",
+"Collapse PIDs",
+"Expand PIDs",
+"Remove sticky entry",
+"Pin as sticky %s",
+"Invalid Input",
+"Quota value too large (max 1 PB)",
+
+"Start",
+"Stop",
+"Reload",
+"Ready",
+"Configuration Required",
+"No network interface selected.\n\n"
+"Please go to View > Options and select at least one network interface.",
+"Failed to create shaper instance",
+"Failed to start shaper: %s",
+"\r\n*** QUOTA EXHAUSTED PROCESSES ***\r\n",
+" (IN)",
+" (OUT)",
+"--- Session ended (stats frozen) ---\r\n"
+"Packets processed:  %llu\r\n"
+"Dropped (rate):     %llu\r\n"
+"Dropped (loss):     %llu\r\n"
+"Delayed:            %llu\r\n"
+"Invalid:            %llu\r\n"
+"\r\n"
+"Total Bytes:        %llu (%.2f MB)\r\n"
+"Download Bytes:     %llu (%.2f MB)\r\n"
+"Upload Bytes:       %llu (%.2f MB)\r\n"
+"%s%s%s",
+"\r\n*** DATA CAP REACHED ***",
+"Hide",
+"Show",
+"Statistics",
+"Exit",
+"Saved NIC not found: '%s' - check Options",
+"No IP",
+"About",
+"BandwidthShaper %s\nAdvanced Traffic Shaper\n\nMade by: niltwill\nhttps://github.com/niltwill/BandwidthShaper",
+"Shaper running",
+"Stopped",
+"Configuration reloaded",
+"Configuration reloaded (fallback)",
+"Reload failed: %s",
+"Reload Error",
+
+"Maximum total inbound bandwidth across all processes combined.\n"
+"0 = no global limit (per-process limits still apply).",
+"Maximum total outbound bandwidth across all processes combined.\n"
+"0 = no global limit (per-process limits still apply).",
+"Size of the internal packet buffer for inbound traffic, in bytes.\n"
+"Larger values smooth out bursty traffic but increase memory use.\n"
+"Typical range: 65536 - 524288.",
+"Size of the internal packet buffer for outbound traffic, in bytes.\n"
+"Larger values smooth out bursty traffic but increase memory use.\n"
+"Typical range: 65536 - 524288.",
+"Maximum number of bytes a process may send in a single burst before throttling kicks in.\n"
+"0 = chosen automatically based on the active limit.\n"
+"Increase this if limited connections feel laggy;\n"
+"decrease to enforce stricter pacing.",
+"How often the shaper re-evaluates traffic and applies limits.\n"
+"In Packets mode: trigger after this many packets.\n"
+"In Milliseconds mode: trigger every this many ms.\n"
+"Lower = more responsive, but higher CPU use.",
+"Trigger a traffic update after a fixed number of packets.\n"
+"Good for high-packet-rate connections (gaming, VoIP).",
+"Trigger a traffic update on a fixed time interval.\n"
+"Good for bulk transfers (downloads, streaming).",
+"Minimum time in milliseconds that must elapse between two consecutive "
+"traffic updates, regardless of the interval setting above. "
+"Prevents thrashing when many small packets arrive at once.",
+"Session-wide data cap in megabytes. Once total traffic (in + out)\n"
+"exceeds this value the shaper blocks all further traffic.\n"
+"0 = no cap. Resets when the shaper is stopped and restarted.",
+"Maximum number of simultaneous TCP connections allowed per process. "
+"New connections beyond this limit are dropped.\n"
+"0 = no connection limit.",
+"Maximum number of simultaneous UDP flows allowed per process. "
+"New flows beyond this limit are dropped.\n"
+"0 = no flow limit.",
+"Artificial delay added to every packet, in milliseconds.\n"
+"Useful for testing application behaviour under high-latency conditions.\n"
+"0 = no added latency.",
+"Percentage of packets to drop randomly (0.00 - 100.00).\n"
+"Simulates an unreliable network link.\n"
+"0 = no packet loss.",
+"The priority set for WinDivert itself (-30000 lowest to 30000 highest). "
+"Negative values deprioritise traffic; positive values prioritise it.\n"
+"-30000 = lowest, -15000 = low, 0 = normal,\n"
+"15000 = high, 30000 = highest.",
+"Select one or more network adapters to monitor and shape.\n"
+"The list is disabled while the shaper is running.",
+"When minimized, hide the window and show only a system tray icon. "
+"Double-click the tray icon to restore.",
+"Save all current Options values to BandwidthShaper.cfg\n"
+"when the program exits, and reload them on next launch.",
+"Save the sticky process list (pinned processes and their limits)\n"
+"to BandwidthShaper.cfg on exit, and restore them on next launch.\n"
+"Does require 'Remember settings on exit' to also be checked.",
+"Save the config file to this location when the program exits,\n"
+"and reload them using that path next launch.",
+"Save the snapshots from statistics to this location,\n"
+"instead of the same directory as the EXE file itself.",
+"Change the language of the program.",
+"Failed to reload config: %s",
+"Select folder for the config file (BandwidthShaper.cfg):",
+"Select folder for CSV snapshot exports:",
+"Data In",
+"Data Out",
+"Save Statistics",
+"Packets processed:  %I64u\r\n"
+"Dropped (rate):     %I64u\r\n"
+"Dropped (loss):     %I64u\r\n"
+"Delayed:            %I64u\r\n"
+"Invalid:            %I64u\r\n"
+"\r\n"
+"Total Bytes:        %I64u (%.2f MB)\r\n"
+"Download Bytes:     %I64u (%.2f MB)\r\n"
+"Upload Bytes:       %I64u (%.2f MB)\r\n"
+"\r\n"
+"Current Rate:       %.2f / %.2f KB/s\r\n"
+"%s%s%s",
+"Please enter a process name.",
+"(no schedule - rules always active)",
+"Schedule - %s",
+"Time",
+"(24h)",
+"Day of week",
+"Mo",
+"Tu",
+"We",
+"Th",
+"Fr",
+"Sa",
+"Su",
+"When outside the schedule, all rules for this process are suspended.",
+"Reset",
+"OK",
+"Cancel",
+"Invalid Schedule",
+"Start and end times are identical.\n"
+"Please enter a valid time range, or uncheck the Time option.",
+"No days of the week are selected.\n"
+"Please select at least one day, or uncheck the Day of week option.",
+"Failed to create the CSV file.\n"
+"Make sure the application has write access to its directory.",
+"BandwidthShaper Statistics Export\n",
+"Generated,%04u-%02u-%02u %02u:%02u:%02u\n\n",
+"Per-Process Traffic\n",
+"Process,Description,Data In (MB),Data Out (MB),Total (MB),Quota In (MB),Quota Out (MB),Quota Exhausted\n",
+"YES",
+"NO",
+"(no traffic recorded)\n",
+"Session Summary\n",
+"Packets processed,%llu\n",
+"Dropped (rate limit),%llu\n",
+"Dropped (loss sim),%llu\n",
+"Delayed,%llu\n",
+"Invalid packets,%llu\n",
+"Total bytes processed,%llu\n",
+"Total bytes processed (MB),%.3f\n",
+"Download bytes (MB),%.3f\n",
+"Upload bytes (MB),%.3f\n",
+"Data cap reached,YES\n",
+"\nQuota Exhausted Processes\n",
+"Process,Quota Type,Quota (MB),Used (MB)\n",
+"\"%s\",IN,%.3f,%.3f\n",
+"\"%s\",OUT,%.3f,%.3f\n",
+"(shaper not yet stopped - no final summary available)\n",
+"Statistics saved to:\n%s",
+
+"&File",
+"&Locate process...\t(Alt+L)",
+"&Specify process...\t(Alt+P)",
+"&Remove sticky entry\t(Alt+R)",
+"E&xit\t(Alt+F4)",
+"&View",
+"&Refresh Processes\t(F5)",
+"E&xpand All\t(Alt++)",
+"C&ollapse All\t(Alt+-)",
+"Update &Frequency",
+"Often (1 s)",
+"Normal (2 s)",
+"Slower (15 s)",
+"Scarcely (45 s)",
+"Rarely (2 min)",
+"Disabled",
+"&Processes",
+"Show &All\t(Alt+A)",
+"Show only s&ticky\t(Alt+S)",
+"Show only &running\t(Alt+C)",
+"&Options\t(Ctrl+O)",
+"&Statistics\t(Ctrl+S)",
+"&Help",
+"&About",
+
+"Options",
+"Global Bandwidth Limits",
+"Download:",
+"KB/s (0 = unlimited)",
+"Upload:",
+"KB/s (0 = unlimited)",
+"Data cap:",
+"MB (0 = unlimited)",
+"Network Interfaces",
+"Selected NICs:",
+"Buffer Settings",
+"Download buffer:",  
+"bytes",
+"Upload buffer:",
+"Burst size:",
+"bytes (0 = auto)",
+"Process Update Interval",
+"Update every:",
+"Packets",
+"Milliseconds",
+"Cooldown:",
+"ms",
+"Advanced",
+"TCP conn limit:",
+"(0 = unlimited)",
+"UDP conn limit:",
+"(0 = unlimited)",
+"Latency:",
+"Packet loss:",
+"%",
+"Priority:",
+"Language",
+"Current language:",
+"Behavior",
+"Minimize to system tray",
+"Remember settings on exit",
+"Remember sticky processes on exit",
+"File Paths",
+"Config folder:",
+"(empty = same folder as the executable)",
+"Snapshots folder:",
+"(empty = same folder as the executable)",
+"OK",
+"Cancel",
+
+"Specify Process",
+"Process name (without .exe):",
+"Add",
+
+"Statistics - BandwidthShaper",
+"Download History",
+"Upload History",
+"Per-Process Traffic",
+"Statistics:",
+"&Save Statistics",
+"&Reset Statistics",
+"&Close",
+
+"English",
+"Hungarian",
+"Unknown",

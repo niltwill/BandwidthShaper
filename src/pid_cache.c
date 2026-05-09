@@ -3,6 +3,7 @@
 // owner-PID table management.
 
 #include "pid_cache.h"
+#include "localization_api.h"
 
 // -----------------------------------------------------------------------
 // PID entry memory pools
@@ -155,7 +156,7 @@ PIDEntry* pid_pool_alloc(PIDEntryPool *pool) {
                 // If we can't expand free list, we can still use the new arena
                 // but won't be able to free entries from it later
                 // For simplicity, we'll still proceed but log a warning
-                fprintf(stderr, "Warning: Could not expand PID free list\n");
+                fprintf(stderr, C(CLI_WARN_PID_LIST_SIZE));
             } else {
                 pool->free_list = new_fl;
                 pool->free_list_capacity = new_fl_capacity;
@@ -199,7 +200,7 @@ void pid_pool_free(PIDEntryPool *pool, PIDEntry *entry) {
                         // Can't expand - log warning once and leak (better than crashing)
                         static LONG warned_flag = 0;
                         if (!InterlockedCompareExchange(&warned_flag, 1, 0)) {
-                            fprintf(stderr, "Warning: PID free list full, memory will leak until shutdown\n");
+                            fprintf(stderr, C(CLI_WARN_PID_LIST_LEAK));
                         }
                         LeaveCriticalSection(&pool->lock);
                         return;
@@ -249,7 +250,7 @@ void add_pid_to_map_pool(PIDEntry **pid_map, int pid, PIDEntryPool *pool) {
 
     entry = pid_pool_alloc(pool);
     if (!entry) {
-        fprintf(stderr, "add_pid_to_map_pool: memory allocation failed\n");
+        fprintf(stderr, C(CLI_ERR_PID_POOL_MEM));
         exit(EXIT_FAILURE);
     }
     entry->pid = pid;
@@ -281,11 +282,11 @@ int get_pids_from_name(const char *process_name, int **pid_list) {
     while (1) {
         processes = realloc(processes, buf_size);
         if (!processes) {
-            fprintf(stderr, "get_pids_from_name: memory allocation failed\n");
+            fprintf(stderr, C(CLI_ERR_PID_PROC_MEM));
             return 0;
         }
         if (!EnumProcesses(processes, buf_size, &needed)) {
-            fprintf(stderr, "get_pids_from_name: EnumProcesses failed\n");
+            fprintf(stderr, C(CLI_ERR_PID_NAME_PROC));
             free(processes);
             return 0;
         }

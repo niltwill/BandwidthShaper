@@ -49,6 +49,8 @@ The CLI version has the following options available:
 Usage: BandwidthShaper [OPTIONS]
 Options:
   -C, --config <path>                           Load configuration from INI-style file (overrides CLI arguments)
+  -l, --lang <en|...>                           Set interface language (default: en)
+                                                  Available languages: en, hu
   -P, --priority <NUM>                          Set WinDivert priority (default: 0, range: -30000 to 30000)
   -p, --process <process1,process2,...>         List of process names to monitor (comma-separated)
   -z, --pid <pidnum1,pidnum2,...>               List of PIDs to monitor (comma-separated)
@@ -58,7 +60,7 @@ Options:
   -T, --schedule [HHMM-HHMM][~<days>]           Restrict preceding -p/-z/-c/-S to a time/day window
                                                   Days: 1=Mon..7=Sun; ranges (1-5) and lists (1,3,5) OK
                                                   Examples: 0800-1800~1-5  2200-0600~6,7
-  -Q, --quota-check-interval <ms>               How often to check quotas/schedules (default: 15000ms)
+  -Q, --quota-check-interval <ms>               How often to check quotas/schedules (default: 1000ms)
   -I, --stats-interval <ms>                     How often to print statistics (default: 5000ms, requires -s)
   -i, --process-update-interval <NUM>[p|t][,c]  Packet/time threshold for PID refresh + optional cooldown
   -a, --disable-after <RATE>[KB|MB|GB]          Disable internet after reaching data cap (0 = no cap)
@@ -72,7 +74,7 @@ Options:
   -L, --latency <ms>                            Simulated latency in ms (0 = none)
   -m, --packet-loss <float>                     Simulated packet loss % (0.00 = none)
   -n, --nic <index>[:<DL>:<UL>][,...]           NIC index(es) to throttle; optional per-NIC rates
-  -l, --list-nics                               List all available network interfaces
+  -A, --list-nics                               List all available network interfaces
   -s, --statistics                              Enable periodic statistics output
   -q, --quiet                                   Suppress most console messages
   -v, --version                                 Display version and exit
@@ -165,6 +167,12 @@ schedule = 0000-2359~1-7     ; Global fallback schedule
 ```
 
 There has to be a --rule, --stop-at, --process, or --pid before the --schedule. If yes, it applies the schedule to that specific rule. If not, it becomes a global schedule that applies to all throttled traffic. So you have to remember, that the order matters here: the schedule must come after the process/rule it applies to, not before. Each process target can have its own unique schedule. If a schedule appears before any process targets, it applies to all throttled traffic.
+
+## Translation
+
+If you wish to add new language: use the English text files from the [https://github.com/niltwill/BandwidthShaper/tree/main/src/language](language) folder. It's simple plain text translation for three files - no need to know the keys, just edit the strings between the quotation marks. The multiline strings can spawn as many lines as you need, but make sure it closes with an ending quotation mark, followed by a comma. Once the translation is finished, open an issue or pull request. Note that this can't be easily tested, as the inclusion requires recompilation. This was a design decision - so that the user can't simply ruin the strings by editing pre-existing files or by removing/misplacing such files.
+
+To test it, you need to compile the program yourself and include the changes in three localization-related files (`localization_api.c`, `localization_ids.h`, `localization_data.c`). Otherwise, expect some back and forth feedback to iron this out. The string length can be a problem in certain languages (in the GUI or the default CLI window size - the English strings fit without newlines, a translation may not - though in the CLI, it's not that big of an issue).
 
 ## Issues
 

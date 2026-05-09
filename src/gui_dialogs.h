@@ -29,4 +29,9 @@ LRESULT CALLBACK ChartWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam,
 // CSV export
 bool SaveStatisticsToCSV(HWND hParent);
 
+// Language change
+void RefreshOptionsDlgStrings(HWND hDlg);
+void RefreshStatsDlgStrings(HWND hDlg);
+void RefreshSpecifyProcDlgStrings(HWND hDlg);
+
 #endif

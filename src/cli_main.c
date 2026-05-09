@@ -18,6 +18,7 @@
 #include "shaper_core.h"
 #include "shaper_utils.h"
 #include "schedule.h"
+#include "localization_api.h"
 
 // -----------------------------------------------------------------------
 // Shared quit flag
@@ -54,15 +55,15 @@ static void print_startup_summary(const ParsedArgs *args) {
     // Priority label
     int p = args->priority;
     const char *plabel =
-        (p == 30000)               ? " (highest)" :
-        (p > 15000)                ? " (high)"    :
-        (p >= 0 && p <= 14999)     ? " (normal)"  :
-        (p >= -15000)              ? " (low)"      :
-                                     " (lowest)";
-    printf("Priority: %d%s\n", p, plabel);
+        (p == 30000)               ? C(CLI_PRIORITY_HIGHEST) :
+        (p > 15000)                ? C(CLI_PRIORITY_HIGH)    :
+        (p >= 0 && p <= 14999)     ? C(CLI_PRIORITY_NORMAL)  :
+        (p >= -15000)              ? C(CLI_PRIORITY_LOW)     :
+                                     C(CLI_PRIORITY_LOWEST);
+    printf(C(CLI_PRIORITY_LABEL), p, plabel);
 
     // NIC list
-    printf("Bandwidth throttled on NIC index: ");
+    printf("%s", C(CLI_NIC_HEADER));
     for (unsigned int i = 0; i < args->throttling.nic_count; i++) {
         if (i > 0) printf(", ");
         printf("%u", args->throttling.nic_indices[i]);
@@ -70,53 +71,54 @@ static void print_startup_summary(const ParsedArgs *args) {
     printf("\n");
 
     if (args->data_cap_bytes > 0)
-        printf("Data cap: %.2f GB (internet disabled when reached)\n",
-               args->data_cap_bytes / 1e9);
+        printf(C(CLI_DATA_CAP), args->data_cap_bytes / 1e9);
 
     if (args->download_rate > 0) {
-        print_rate_with_units("Download limit", args->download_rate);
-        printf("Max download buffer size: %u bytes\n", args->download_buffer_size);
+        print_rate_with_units(C(CLI_DL_LIMIT), args->download_rate);
+        printf(C(CLI_DL_BUFFER), args->download_buffer_size);
     }
     if (args->upload_rate > 0) {
-        print_rate_with_units("Upload limit", args->upload_rate);
-        printf("Max upload buffer size: %u bytes\n", args->upload_buffer_size);
+        print_rate_with_units(C(CLI_UL_LIMIT), args->upload_rate);
+        printf(C(CLI_UL_BUFFER), args->upload_buffer_size);
     }
     if (args->burst_size > 0)
-        printf("Burst size: %d bytes (overrides buffer size)\n", args->burst_size);
+        printf(C(CLI_BURST_SIZE), args->burst_size);
     if (args->max_tcp_connections > 0)
-        printf("Max TCP connections: %u\n", args->max_tcp_connections);
+        printf(C(CLI_MAX_TCP), args->max_tcp_connections);
     if (args->max_udp_packets_per_second > 0)
-        printf("Max UDP packets/sec: %u\n", args->max_udp_packets_per_second);
+        printf(C(CLI_MAX_UDP), args->max_udp_packets_per_second);
     if (args->latency_ms > 0)
-        printf("Simulated latency: %u ms\n", args->latency_ms);
+        printf(C(CLI_LATENCY), args->latency_ms);
     if (args->packet_loss > 0.0f)
-        printf("Simulated packet loss: %.2f%%\n", args->packet_loss);
+        printf(C(CLI_PACKET_LOSS), args->packet_loss);
 
     // Per-process rules (rates + quotas + schedules)
     if (args->rules_head) {
-        printf("\nPer-process rules:\n");
+        printf(C(CLI_PER_PROC_HEADER));
         for (struct RuleEntry *e = args->rules_head; e; e = e->next) {
             printf("  [%s]", e->identifier);
+            
             if (e->dl_rate > 0) {
                 double r = e->dl_rate;
-                if      (r >= 1e9) printf("  DL: %.2f GB/s", r / 1e9);
-                else if (r >= 1e6) printf("  DL: %.2f MB/s", r / 1e6);
-                else if (r >= 1e3) printf("  DL: %.2f KB/s", r / 1e3);
-                else               printf("  DL: %.0f B/s",  r);
+                if      (r >= 1e9) printf("  %s %.2f %s", C(CLI_RULE_DL), r / 1e9, C(S_UNIT_GBS));
+                else if (r >= 1e6) printf("  %s %.2f %s", C(CLI_RULE_DL), r / 1e6, C(S_UNIT_MBS));
+                else if (r >= 1e3) printf("  %s %.2f %s", C(CLI_RULE_DL), r / 1e3, C(S_UNIT_KBS));
+                else               printf("  %s %.0f %s", C(CLI_RULE_DL), r,       C(S_UNIT_BPS));
             }
             if (e->ul_rate > 0) {
                 double r = e->ul_rate;
-                if      (r >= 1e9) printf("  UL: %.2f GB/s", r / 1e9);
-                else if (r >= 1e6) printf("  UL: %.2f MB/s", r / 1e6);
-                else if (r >= 1e3) printf("  UL: %.2f KB/s", r / 1e3);
-                else               printf("  UL: %.0f B/s",  r);
+                if      (r >= 1e9) printf("  %s %.2f %s", C(CLI_RULE_UL), r / 1e9, C(S_UNIT_GBS));
+                else if (r >= 1e6) printf("  %s %.2f %s", C(CLI_RULE_UL), r / 1e6, C(S_UNIT_MBS));
+                else if (r >= 1e3) printf("  %s %.2f %s", C(CLI_RULE_UL), r / 1e3, C(S_UNIT_KBS));
+                else               printf("  %s %.0f %s", C(CLI_RULE_UL), r,       C(S_UNIT_BPS));
             }
-            if (e->quota_in  > 0) printf("  Quota-in: %.2f MB",  e->quota_in  / 1e6);
-            if (e->quota_out > 0) printf("  Quota-out: %.2f MB", e->quota_out / 1e6);
+            if (e->quota_in  > 0) printf(C(CLI_RULE_QUOTA_IN),  e->quota_in  / 1e6);
+            if (e->quota_out > 0) printf(C(CLI_RULE_QUOTA_OUT), e->quota_out / 1e6);
+            
             if (!schedule_is_empty(&e->schedule)) {
                 wchar_t sched_buf[64];
                 schedule_describe(&e->schedule, sched_buf, _countof(sched_buf));
-                printf("  Schedule: %ls", sched_buf);
+                printf(C(CLI_RULE_SCHEDULE), sched_buf);
             }
             printf("\n");
         }
@@ -126,32 +128,30 @@ static void print_startup_summary(const ParsedArgs *args) {
     if (!schedule_is_empty(&args->global_schedule)) {
         wchar_t sched_buf[64];
         schedule_describe(&args->global_schedule, sched_buf, _countof(sched_buf));
-        printf("\nGlobal schedule: %ls\n", sched_buf);
-        printf("  (all rules suspended outside this window)\n");
+        printf(C(CLI_GLOBAL_SCHEDULE), sched_buf);
+        printf(C(CLI_GLOBAL_SCHED_NOTE));
     }
 
-    printf("\nPress 'Q' or Ctrl+C to quit.  Press 'R' to reload configuration.\n");
+    printf(C(CLI_QUIT_HINT));
 }
 
 // Validate ParsedArgs before WinDivert
 // Returns true if everything looks sane
 static bool validate_args(const ParsedArgs *args) {
     if (args->download_rate < 0 || args->upload_rate < 0) {
-        fprintf(stderr, "Error: Download/Upload rate must not be negative.\n");
+        fprintf(stderr, C(CLI_ERR_RATE_NEGATIVE));
         return false;
     }
     if (args->packet_loss < 0.0f || args->packet_loss > 100.0f) {
-        fprintf(stderr, "Error: Packet loss must be between 0 and 100.\n");
+        fprintf(stderr, C(CLI_ERR_PACKET_LOSS_RANGE));
         return false;
     }
     if (args->throttling.nic_count == 0) {
-        fprintf(stderr, "Error: You must specify at least one NIC with --nic.\n");
+        fprintf(stderr, C(CLI_ERR_NO_NIC));
         return false;
     }
     if (!is_admin()) {
-        fprintf(stderr,
-            "Error: Administrator privileges required.\n"
-            "       Please relaunch from an elevated command prompt.\n");
+        fprintf(stderr, C(CLI_ERR_NO_ADMIN));
         return false;
     }
     return true;
@@ -186,12 +186,12 @@ static void sync_rules_to_shaper(ShaperInstance *shaper, struct RuleEntry *const
 
                     // Log only once per process (track last_breach_logged per rule)
                     if (!e->quota_breach_logged && !quiet_mode) {
-                        printf("[quota] Process '%s' reached limit: ", e->identifier);
+                        printf(C(CLI_QUOTA_REACHED), e->identifier);
                         if (e->quota_in > 0 && total_dl >= e->quota_in)
-                            printf("IN %.2f/%.2f MB ", total_dl/1e6, e->quota_in/1e6);
+                            printf(C(CLI_QUOTA_IN_DETAIL), total_dl/1e6, e->quota_in/1e6);
                         if (e->quota_out > 0 && total_ul >= e->quota_out)
-                            printf("OUT %.2f/%.2f MB", total_ul/1e6, e->quota_out/1e6);
-                        printf(" - removing rule\n");
+                            printf(C(CLI_QUOTA_OUT_DETAIL), total_ul/1e6, e->quota_out/1e6);
+                        printf(C(CLI_QUOTA_REMOVING));
                         e->quota_breach_logged = true;
                     }
                 } else {
@@ -236,8 +236,8 @@ static void sync_rules_to_shaper(ShaperInstance *shaper, struct RuleEntry *const
     if (added > 0 || removed > 0) {
         shaper_reload_rules(shaper);
         if (!quiet_mode && (added > 0 || removed > 0 || quota_stopped > 0)) {
-            printf("[schedule] Synced: %d added, %d removed", added, removed);
-            if (quota_stopped > 0) printf(" (%d quota-exceeded)", quota_stopped);
+            printf(C(CLI_SCHED_SYNCED), added, removed);
+            if (quota_stopped > 0) printf(C(CLI_SCHED_QUOTA_EXCEEDED), quota_stopped);
             printf("\n");
         }
     }
@@ -258,7 +258,7 @@ static bool register_rules(ShaperInstance *shaper, const ParsedArgs *args) {
                                      e->dl_rate, e->ul_rate,
                                      false, false,  // not blocked initially
                                      e->quota_in, e->quota_out, &e->schedule)) {
-            fprintf(stderr, "Error: failed to register rule for '%s'\n", e->identifier);
+            fprintf(stderr, C(CLI_ERR_RULE_REGISTER), e->identifier);
             return false;
         }
         // Set per-process quotas if specified via -S / --stop-at
@@ -275,7 +275,7 @@ static bool do_hot_reload(ShaperInstance *shaper,
                           int argc, char **argv,
                           const char *config_path,  // may be NULL
                           bool quiet_mode) {
-    if (!quiet_mode) printf("\nHot-reloading configuration...\n");
+    if (!quiet_mode) printf(C(CLI_RELOADING));
 
     ParsedArgs new_args;
     parsed_args_init(&new_args);
@@ -291,7 +291,7 @@ static bool do_hot_reload(ShaperInstance *shaper,
     const char *cfg_to_load = new_args.config_path ? new_args.config_path : config_path;
     if (cfg_to_load) {
         if (!load_config_file(cfg_to_load, &new_args)) {
-            fprintf(stderr, "Warning: config file reload failed; using CLI values.\n");
+            fprintf(stderr, C(CLI_WARN_CONFIG_RELOAD));
         }
     }
 
@@ -331,7 +331,7 @@ static bool do_hot_reload(ShaperInstance *shaper,
     bool ok = shaper_reload(shaper, &config);
 
     if (!ok) {
-        fprintf(stderr, "Reload failed: %s\n", shaper_get_last_error(shaper));
+        fprintf(stderr, C(CLI_ERR_RELOAD_CORE), shaper_get_last_error(shaper));
     } else if (!quiet_mode) {
         print_startup_summary(&new_args);
     }
@@ -354,7 +354,7 @@ int cli_run(int argc, char **argv) {
     // 1. Ctrl+C handler
     // ------------------------------------------------------------------
     if (!SetConsoleCtrlHandler(console_ctrl_handler, TRUE)) {
-        fprintf(stderr, "Failed to register console control handler.\n");
+        fprintf(stderr, C(CLI_ERR_CTRL_HANDLER));
         return EXIT_FAILURE;
     }
 
@@ -363,7 +363,7 @@ int cli_run(int argc, char **argv) {
     // ------------------------------------------------------------------
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        fprintf(stderr, "WSAStartup failed.\n");
+        fprintf(stderr, C(CLI_ERR_WSASTARTUP));
         return EXIT_FAILURE;
     }
 
@@ -401,12 +401,12 @@ int cli_run(int argc, char **argv) {
     // ------------------------------------------------------------------
     if (args.config_path) {
         if (!args.quiet_mode)
-            printf("Loading configuration from: %s\n", args.config_path);
+            printf(C(CLI_LOADING_CONFIG), args.config_path);
 
         if (!load_config_file(args.config_path, &args)) {
-            fprintf(stderr, "Warning: config file failed to load; using CLI values.\n");
+            fprintf(stderr, C(CLI_WARN_CONFIG_LOAD));
         } else if (!args.quiet_mode) {
-            printf("Configuration loaded successfully.\n");
+            printf(C(CLI_CONFIG_LOADED));
         }
     }
 
@@ -430,7 +430,7 @@ int cli_run(int argc, char **argv) {
     // ------------------------------------------------------------------
     ShaperInstance *shaper = shaper_create();
     if (!shaper) {
-        fprintf(stderr, "Failed to allocate shaper instance.\n");
+        fprintf(stderr, C(CLI_ERR_SHAPER_ALLOC));
         exit_code = EXIT_FAILURE;
         goto cleanup_args;
     }
@@ -467,7 +467,7 @@ int cli_run(int argc, char **argv) {
     config.enable_statistics = args.enable_statistics;
 
     if (!shaper_start(shaper, &config)) {
-        fprintf(stderr, "Failed to start: %s\n", shaper_get_last_error(shaper));
+        fprintf(stderr, C(CLI_ERR_SHAPER_START), shaper_get_last_error(shaper));
         exit_code = EXIT_FAILURE;
         goto cleanup_shaper;
     }
@@ -505,7 +505,7 @@ int cli_run(int argc, char **argv) {
     while (shaper_get_thread_state(shaper) == SHAPER_THREAD_RUNNING) {
         // Check Ctrl+C
         if (InterlockedCompareExchange(&g_quit_flag, 0, 1) == 1) {
-            if (!quiet_mode) printf("Stopping...\n");
+            if (!quiet_mode) printf(C(CLI_STOPPING));
             shaper_stop(shaper);
             break;
         }
@@ -516,7 +516,7 @@ int cli_run(int argc, char **argv) {
             // Q - quit (debounced)
             if ((GetAsyncKeyState('Q') & 0x8000) && !quit_pending) {
                 quit_pending = true;
-                if (!quiet_mode) printf("Exiting...\n");
+                if (!quiet_mode) printf(C(CLI_EXITING));
                 shaper_stop(shaper);
                 break;
             }
@@ -529,7 +529,7 @@ int cli_run(int argc, char **argv) {
                 reload_pending = true;
                 if (!do_hot_reload(shaper, original_argc, original_argv,
                                    config_path, quiet_mode)) {
-                    fprintf(stderr, "Reload failed - stopping.\n");
+                    fprintf(stderr, C(CLI_ERR_RELOAD_STOPPING));
                     shaper_stop(shaper);
                     exit_code = EXIT_FAILURE;
                     break;
@@ -581,9 +581,9 @@ int cli_run(int argc, char **argv) {
                         if (!quiet_mode) {
                             wchar_t buf[64];
                             schedule_describe(&global_schedule, buf, _countof(buf));
-                            printf("[schedule] Global window (%ls) %s.\n", buf,
-                                   inside ? "entered - rules active"
-                                          : "exited - all rules suspended");
+                            printf(C(CLI_SCHED_GLOBAL_WINDOW), buf,
+                                   inside ? C(CLI_SCHED_GLOBAL_ENTERED)
+                                          : C(CLI_SCHED_GLOBAL_EXITED));
                         }
                     }
                 }
@@ -601,14 +601,22 @@ int cli_run(int argc, char **argv) {
                 ShaperStats stats;
                 shaper_get_stats(shaper, &stats);
 
-                printf("\rPackets: %llu | Dropped(rate): %llu | Dropped(loss): %llu | "
-                       "Delayed: %llu | Bytes: %.2f MB | Cap: %s\n",
+                // Calculate drop rate here to avoid inline complexity
+                double drop_rate = 0.0;
+                if (stats.packets_processed > 0) {
+                    drop_rate = (double)(stats.packets_dropped_rate_limit + 
+                                         stats.packets_dropped_loss) / 
+                                stats.packets_processed * 100.0;
+                }
+
+                printf(C(CLI_STATS_INFO),
                        (unsigned long long)stats.packets_processed,
                        (unsigned long long)stats.packets_dropped_rate_limit,
                        (unsigned long long)stats.packets_dropped_loss,
+                       drop_rate,
                        (unsigned long long)stats.packets_delayed,
                        stats.bytes_processed / (1024.0 * 1024.0),
-                       stats.cap_reached ? "YES" : "no");
+                       stats.cap_reached ? C(S_YES) : C(S_NO));
 
                 fflush(stdout);
             }
@@ -654,5 +662,8 @@ int cli_run(int argc, char **argv) {
 // -----------------------------------------------------------------------
 
 int main(int argc, char **argv) {
+    // Enable UTF-8 output support for the console window
+    SetConsoleOutputCP(CP_UTF8);
+
     return cli_run(argc, argv);
 }

@@ -63,75 +63,80 @@ CAPTION "Options"
 FONT 9, "Segoe UI"
 BEGIN
     // Global Limits Group
-    GROUPBOX "Global Bandwidth Limits", IDC_STATIC, 8, 8, 200, 80
-    LTEXT "Download:", IDC_STATIC, 16, 24, 50, 10
+    GROUPBOX "Global Bandwidth Limits", IDC_OPT_GRP_GLOBAL_LIMITS, 8, 8, 200, 80
+    LTEXT "Download:", IDC_OPT_LBL_DOWNLOAD, 16, 24, 50, 10
     EDITTEXT IDC_OPT_DL_GLOBAL, 70, 22, 60, 12, ES_NUMBER
-    LTEXT "KB/s (0 = unlimited)", IDC_STATIC, 135, 24, 70, 10
+    LTEXT "KB/s (0 = unlimited)", IDC_OPT_LBL_DL_UNLIMITED, 135, 24, 70, 10
 
-    LTEXT "Upload:", IDC_STATIC, 16, 44, 50, 10
+    LTEXT "Upload:", IDC_OPT_LBL_UPLOAD, 16, 44, 50, 10
     EDITTEXT IDC_OPT_UL_GLOBAL, 70, 42, 60, 12, ES_NUMBER
-    LTEXT "KB/s (0 = unlimited)", IDC_STATIC, 135, 44, 70, 10
+    LTEXT "KB/s (0 = unlimited)", IDC_OPT_LBL_UL_UNLIMITED, 135, 44, 70, 10
 
-    LTEXT "Data cap:", IDC_STATIC, 16, 64, 40, 10
+    LTEXT "Data cap:", IDC_OPT_LBL_DATA_CAP, 16, 64, 40, 10
     EDITTEXT IDC_OPT_DATA_CAP, 70, 62, 60, 12, ES_NUMBER
-    LTEXT "MB (0 = unlimited)", IDC_STATIC, 135, 64, 60, 10
+    LTEXT "MB (0 = unlimited)", IDC_OPT_LBL_DATA_CAP_UNLIM, 135, 64, 60, 10
 
     // NIC Selection Group
-    GROUPBOX "Network Interfaces", IDC_STATIC, 220, 8, 190, 100
-    LTEXT "Selected NICs:", IDC_STATIC, 228, 24, 60, 10
+    GROUPBOX "Network Interfaces", IDC_OPT_GRP_NIC_INTERFACES, 220, 8, 190, 100
+    LTEXT "Selected NICs:", IDC_OPT_LBL_NIC_SELECTED, 228, 24, 100, 10
     LISTBOX IDC_OPT_NIC_LIST, 228, 36, 174, 64, LBS_MULTIPLESEL | WS_VSCROLL | WS_TABSTOP
 
     // Buffer Settings Group
-    GROUPBOX "Buffer Settings", IDC_STATIC, 8, 95, 200, 75
-    LTEXT "Download buffer:", IDC_STATIC, 16, 111, 70, 10
+    GROUPBOX "Buffer Settings", IDC_OPT_GRP_BUFFER_SETTINGS, 8, 95, 200, 75
+    LTEXT "Download buffer:", IDC_OPT_LBL_DL_BUFFER, 16, 111, 70, 10
     EDITTEXT IDC_OPT_DL_BUFFER, 90, 109, 60, 12, ES_NUMBER
-    LTEXT "bytes", IDC_STATIC, 155, 111, 25, 10
+    LTEXT "bytes", IDC_OPT_LBL_BYTES, 155, 111, 25, 10
 
-    LTEXT "Upload buffer:", IDC_STATIC, 16, 131, 70, 10
+    LTEXT "Upload buffer:", IDC_OPT_LBL_UL_BUFFER, 16, 131, 70, 10
     EDITTEXT IDC_OPT_UL_BUFFER, 90, 129, 60, 12, ES_NUMBER
-    LTEXT "bytes", IDC_STATIC, 155, 131, 25, 10
+    LTEXT "bytes", IDC_OPT_LBL_BYTES2, 155, 131, 25, 10
 
-    LTEXT "Burst size:", IDC_STATIC, 16, 151, 70, 10
+    LTEXT "Burst size:", IDC_OPT_LBL_BURST_SIZE, 16, 151, 70, 10
     EDITTEXT IDC_OPT_BURST_SIZE, 90, 149, 60, 12, ES_NUMBER
-    LTEXT "bytes (0 = auto)", IDC_STATIC, 155, 151, 50, 10
+    LTEXT "bytes (0 = auto)", IDC_OPT_LBL_BURST_AUTO, 155, 151, 50, 10
 
     // Process Update Group
-    GROUPBOX "Process Update Interval", IDC_STATIC, 8, 175, 200, 75
-    LTEXT "Update every:", IDC_STATIC, 16, 191, 55, 10
+    GROUPBOX "Process Update Interval", IDC_OPT_GRP_UPDATE_INTERVAL, 8, 175, 200, 75
+    LTEXT "Update every:", IDC_OPT_LBL_UPDATE_EVERY, 16, 191, 55, 10
     EDITTEXT IDC_OPT_UPDATE_INTERVAL, 75, 189, 50, 12, ES_NUMBER
 
     CONTROL "Packets", IDC_OPT_UPDATE_TYPE, "Button", BS_AUTORADIOBUTTON | WS_GROUP,
-            130, 205, 60, 10
+            130, 205, 70, 10
     CONTROL "Milliseconds", IDC_OPT_UPDATE_TYPE + 1, "Button", BS_AUTORADIOBUTTON,
-            130, 191, 50, 10
+            130, 191, 70, 10
 
-    LTEXT "Cooldown:", IDC_STATIC, 16, 225, 55, 10
+    LTEXT "Cooldown:", IDC_OPT_LBL_COOLDOWN, 16, 225, 55, 10
     EDITTEXT IDC_OPT_UPDATE_COOLDOWN, 75, 223, 50, 12, ES_NUMBER
-    LTEXT "ms", IDC_STATIC, 130, 225, 20, 10
+    LTEXT "ms", IDC_OPT_LBL_MS, 130, 225, 20, 10
 
     // Advanced Group
-    GROUPBOX "Advanced", IDC_STATIC, 220, 115, 190, 120
-    LTEXT "TCP conn limit:", IDC_STATIC, 228, 131, 60, 10
+    GROUPBOX "Advanced", IDC_OPT_GRP_ADVANCED, 220, 115, 190, 120
+    LTEXT "TCP conn limit:", IDC_OPT_LBL_TCP_LIMIT, 228, 131, 60, 10
     EDITTEXT IDC_OPT_TCP_LIMIT, 295, 129, 50, 12, ES_NUMBER
-    LTEXT "(0 = unlimited)", IDC_STATIC, 350, 131, 55, 10
+    LTEXT "(0 = unlimited)", IDC_OPT_LBL_TCP_UNLIM, 350, 131, 55, 10
 
-    LTEXT "UDP conn limit:", IDC_STATIC, 228, 151, 60, 10
+    LTEXT "UDP conn limit:", IDC_OPT_LBL_UDP_LIMIT, 228, 151, 60, 10
     EDITTEXT IDC_OPT_UDP_LIMIT, 295, 149, 50, 12, ES_NUMBER
-    LTEXT "(0 = unlimited)", IDC_STATIC, 350, 151, 55, 10
+    LTEXT "(0 = unlimited)", IDC_OPT_LBL_UDP_UNLIM, 350, 151, 55, 10
 
-    LTEXT "Latency:", IDC_STATIC, 228, 171, 40, 10
+    LTEXT "Latency:", IDC_OPT_LBL_LATENCY, 228, 171, 60, 10
     EDITTEXT IDC_OPT_LATENCY, 295, 169, 50, 12, ES_NUMBER
-    LTEXT "ms", IDC_STATIC, 350, 171, 20, 10
+    LTEXT "ms", IDC_OPT_LBL_MS2, 350, 171, 20, 10
 
-    LTEXT "Packet loss:", IDC_STATIC, 228, 191, 50, 10
+    LTEXT "Packet loss:", IDC_OPT_LBL_PACKET_LOSS, 228, 191, 70, 10
     EDITTEXT IDC_OPT_PACKET_LOSS, 295, 189, 50, 12
-    LTEXT "%", IDC_STATIC, 350, 191, 10, 10
+    LTEXT "%", IDC_OPT_LBL_PERCENT, 350, 191, 10, 10
 
-    LTEXT "Priority:", IDC_STATIC, 228, 211, 40, 10
+    LTEXT "Priority:", IDC_OPT_LBL_PRIORITY, 228, 211, 60, 10
     EDITTEXT IDC_OPT_PRIORITY, 295, 209, 50, 12
 
+    // Language Group
+    GROUPBOX "Language", IDC_OPT_GRP_LANGUAGE, 220, 240, 190, 40
+    LTEXT "Language:", IDC_OPT_LBL_LANGUAGE, 228, 255, 70, 10
+    COMBOBOX IDC_OPT_LANGUAGE, 295, 253, 100, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+
     // Behavior Group
-    GROUPBOX "Behavior", IDC_STATIC, 8, 255, 200, 70
+    GROUPBOX "Behavior", IDC_OPT_GRP_BEHAVIOR, 8, 255, 200, 70
     CONTROL "Minimize to system tray", IDC_OPT_MINIMIZE_TRAY, "Button",
             BS_AUTOCHECKBOX | WS_TABSTOP, 16, 271, 180, 10
     CONTROL "Remember settings on exit", IDC_OPT_SAVE_SETTINGS, "Button",
@@ -140,16 +145,16 @@ BEGIN
             BS_AUTOCHECKBOX | WS_TABSTOP, 16, 303, 180, 10
 
     // File Paths Group
-    GROUPBOX "File Paths", IDC_STATIC, 8, 335, 402, 80
-    LTEXT "Config folder:", IDC_STATIC, 16, 351, 60, 10
+    GROUPBOX "File Paths", IDC_OPT_GRP_FILE_PATHS, 8, 335, 402, 80
+    LTEXT "Config folder:", IDC_OPT_LBL_CONFIG_FOLDER, 16, 351, 60, 10
     EDITTEXT IDC_OPT_CONFIG_DIR, 84, 349, 278, 12, ES_AUTOHSCROLL
     PUSHBUTTON "...", IDC_OPT_CONFIG_DIR_BROWSE, 366, 348, 36, 14
-    LTEXT "(empty = same folder as the executable)", IDC_STATIC, 84, 363, 200, 10
+    LTEXT "(empty = same folder as the executable)", IDC_OPT_LBL_CONFIG_HINT, 84, 363, 200, 10
 
-    LTEXT "Snapshots folder:", IDC_STATIC, 16, 383, 65, 10
+    LTEXT "Snapshots folder:", IDC_OPT_LBL_SNAPSHOT_FOLDER, 16, 383, 65, 10
     EDITTEXT IDC_OPT_SNAPSHOT_DIR, 84, 381, 278, 12, ES_AUTOHSCROLL
     PUSHBUTTON "...", IDC_OPT_SNAPSHOT_DIR_BROWSE, 366, 380, 36, 14
-    LTEXT "(empty = same folder as the executable)", IDC_STATIC, 84, 395, 200, 10
+    LTEXT "(empty = same folder as the executable)", IDC_OPT_LBL_SNAPSHOT_HINT, 84, 395, 200, 10
 
     // Buttons
     DEFPUSHBUTTON "OK", IDOK, 270, 425, 60, 16
@@ -164,7 +169,7 @@ STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Specify Process"
 FONT 9, "Segoe UI"
 BEGIN
-    LTEXT "Process name (without .exe):", IDC_STATIC, 8, 8, 160, 10
+    LTEXT "Process name (without .exe):", IDC_SPECIFY_PROMPT, 8, 8, 160, 10
     EDITTEXT IDC_SPECIFY_NAME, 8, 22, 214, 12, ES_AUTOHSCROLL
     DEFPUSHBUTTON "Add",    IDOK,     112, 44, 50, 14
     PUSHBUTTON    "Cancel", IDCANCEL, 172, 44, 50, 14
@@ -179,28 +184,28 @@ CAPTION "Statistics - BandwidthShaper"
 FONT 9, "Segoe UI"
 BEGIN
     // Download chart
-    LTEXT "Download History", IDC_STATIC_DL_LABEL, 8, 8, 100, 10
+    LTEXT "Download History", IDC_STATS_LBL_DL_HISTORY, 8, 8, 200, 10
     CONTROL "", IDC_STATS_DL_CHART, "STATIC", SS_BLACKRECT | WS_BORDER,
             8, 20, 480, 80
 
     // Upload chart
-    LTEXT "Upload History", IDC_STATIC_UL_LABEL, 8, 108, 100, 10
+    LTEXT "Upload History", IDC_STATS_LBL_UL_HISTORY, 8, 108, 200, 10
     CONTROL "", IDC_STATS_UL_CHART, "STATIC", SS_BLACKRECT | WS_BORDER,
             8, 120, 480, 80
 
     // Per-process traffic list with label
-    LTEXT "Per-Process Traffic", IDC_STATIC_PROC_LIST_LABEL, 8, 210, 100, 10
+    LTEXT "Per-Process Traffic", IDC_STATS_LBL_PROC_TRAFFIC, 8, 210, 200, 10
     CONTROL "", IDC_STATS_PROC_LIST, "SysListView32", 
             LVS_REPORT | LVS_SINGLESEL | WS_BORDER | WS_TABSTOP,
             8, 222, 480, 150
 
     // Statistics text with label
-    LTEXT "Statistics:", IDC_STATIC_STATS_LABEL, 8, 380, 50, 10
+    LTEXT "Statistics:", IDC_STATS_LBL_STATS, 8, 380, 80, 10
     EDITTEXT IDC_STATS_TEXT, 8, 395, 480, 70, ES_MULTILINE | ES_READONLY |
              WS_VSCROLL | ES_AUTOVSCROLL | NOT WS_TABSTOP
 
     // Buttons
-    PUSHBUTTON "&Save Statistics", IDC_STATS_SAVE, 8, 470, 110, 23
-    PUSHBUTTON "&Reset Statistics", IDC_STATS_RESET, 126, 470, 110, 23
+    PUSHBUTTON "&Save Statistics", IDC_STATS_BTN_SAVE, 8, 470, 110, 23
+    PUSHBUTTON "&Reset Statistics", IDC_STATS_BTN_RESET, 126, 470, 110, 23
     DEFPUSHBUTTON "&Close", IDCLOSE, 378, 470, 110, 23
 END

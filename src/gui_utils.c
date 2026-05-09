@@ -9,6 +9,7 @@
 #include "resource.h"
 #include "shaper_core.h"
 #include "shaper_utils.h"
+#include "localization_api.h"
 #include "external/UAHMenuBar.h"
 #include <shellapi.h>
 #include <commctrl.h>
@@ -57,7 +58,15 @@ const UINT FREQ_INTERVALS[] = {
 };
 
 const double UNIT_MULTIPLIERS[UNIT_COUNT] = {1.0, 1000.0, 1000000.0, 1000000000.0};
+// Filled by InitUnitLabels() once the locale is set; T() is a runtime call.
 const wchar_t* UNIT_LABELS[UNIT_COUNT] = {L"B/s", L"KB/s", L"MB/s", L"GB/s"};
+
+void InitUnitLabels(void) {
+    UNIT_LABELS[UNIT_BYTES] = T(S_UNIT_BPS);
+    UNIT_LABELS[UNIT_KB] = T(S_UNIT_KBS);
+    UNIT_LABELS[UNIT_MB] = T(S_UNIT_MBS);
+    UNIT_LABELS[UNIT_GB] = T(S_UNIT_GBS);
+}
 
 // ---------------------------------------------------------------------------
 // Admin privilege check and elevation helpers
@@ -106,15 +115,15 @@ void InitializeMainWindow(HWND hWnd) {
     SetWindowSubclass(g_app.hToolbar, ToolbarPanelSubclassProc, 0, 0);
 
     // Create buttons
-    CreateWindowW(L"BUTTON", L"Start",
+    CreateWindowW(L"BUTTON", T(GUI_START),
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         0, 0, 0, 0, hWnd, (HMENU)IDC_START_BTN, g_hInst, NULL);
 
-    CreateWindowW(L"BUTTON", L"Stop",
+    CreateWindowW(L"BUTTON", T(GUI_STOP),
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED,
         0, 0, 0, 0, hWnd, (HMENU)IDC_STOP_BTN, g_hInst, NULL);
 
-    CreateWindowW(L"BUTTON", L"Reload",
+    CreateWindowW(L"BUTTON", T(GUI_RELOAD),
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED,
         0, 0, 0, 0, hWnd, (HMENU)IDC_RELOAD_BTN, g_hInst, NULL);
 
@@ -152,7 +161,7 @@ void CreateStatusBar(HWND hWnd) {
 
     int parts[] = {S(300), S(500), -1};
     SendMessage(g_app.hStatusBar, SB_SETPARTS, 3, (LPARAM)parts);
-    SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Ready");
+    SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)T(GUI_STATUS_READY));
 
     // Colorize statusbar
     SetWindowSubclass(g_app.hStatusBar, StatusBarSubclassProc, 0, 0);
@@ -168,16 +177,15 @@ bool StartShaper(void) {
     // Check if any NIC is selected
     if (g_app.options.selected_nics[0] == L'\0') {
         MSGBOX(g_app.hMainWnd,
-            L"No network interface selected.\n\n"
-            L"Please go to View > Options and select at least one network interface.",
-            L"Configuration Required",
+            T(GUI_OPT_NO_NIC_MSG),
+            T(GUI_OPT_NO_NIC_CAP),
             MB_OK | MB_ICONWARNING);
         return false;
     }
 
     g_app.shaper = shaper_create();
     if (!g_app.shaper) {
-        MSGBOX(g_app.hMainWnd, L"Failed to create shaper instance", L"Error", MB_OK);
+        MSGBOX(g_app.hMainWnd, T(GUI_ERR_SHAPER_ALLOC), T(S_ERROR), MB_OK);
         return false;
     }
 
@@ -242,13 +250,9 @@ bool StartShaper(void) {
     bool ok = shaper_start(g_app.shaper, &config);
 
     if (!ok) {
-        char err[512];
-        snprintf(err, 512, "Failed to start shaper: %s",
-                shaper_get_last_error(g_app.shaper));
-        wchar_t werr[512];
-        MultiByteToWideChar(CP_UTF8, 0, err, -1, werr, 512);
-        MSGBOX(g_app.hMainWnd, werr, L"Error", MB_OK);
-
+        wchar_t err[512];
+        swprintf(err, 512, T(GUI_ERR_SHAPER_START), shaper_get_last_error(g_app.shaper));
+        MSGBOX(g_app.hMainWnd, err, T(S_ERROR), MB_OK);
         shaper_destroy(g_app.shaper);
         g_app.shaper = NULL;
         return false;
@@ -373,16 +377,16 @@ void StopShaper(void) {
             (proc->quota_out > 0 && proc->quota_out_used >= proc->quota_out)) {
 
             if (!quota_exhausted) {
-                wcsncpy(quota_msg, L"\r\n*** QUOTA EXHAUSTED PROCESSES ***\r\n", 255);
+                wcsncpy(quota_msg, T(GUI_STATS_QUOTA_HEADER), 255);
                 quota_exhausted = true;
             }
 
             wchar_t line[128];
             swprintf(line, 128, L"  %s", proc->name);
             if (proc->quota_in > 0 && proc->quota_in_used >= proc->quota_in)
-                wcscat(line, L" (IN)");
+                wcscat(line, T(GUI_STATS_QUOTA_IN_SUFFIX));
             if (proc->quota_out > 0 && proc->quota_out_used >= proc->quota_out)
-                wcscat(line, L" (OUT)");
+                wcscat(line, T(GUI_STATS_QUOTA_OUT_SUFFIX));
             wcscat(line, L"\r\n");
 
             // Ensure we don't overflow quota_msg
@@ -394,19 +398,9 @@ void StopShaper(void) {
 
     LeaveCriticalSection(&g_app.process_lock);
 
-    // Build a frozen text copy for the stats dialog - matching new format
+    // Build a frozen text copy for the stats dialog
     swprintf(g_app.last_stats_text, 768,
-        L"--- Session ended (stats frozen) ---\r\n"
-        L"Packets processed:  %llu\r\n"
-        L"Dropped (rate):     %llu\r\n"
-        L"Dropped (loss):     %llu\r\n"
-        L"Delayed:            %llu\r\n"
-        L"Invalid:            %llu\r\n"
-        L"\r\n"
-        L"Total Bytes:        %llu (%.2f MB)\r\n"
-        L"Download Bytes:     %llu (%.2f MB)\r\n"
-        L"Upload Bytes:       %llu (%.2f MB)\r\n"
-        L"%s%s%s",
+        T(GUI_STATS_TEXT),
         g_app.last_stats.packets_processed,
         g_app.last_stats.packets_dropped_rate_limit,
         g_app.last_stats.packets_dropped_loss,
@@ -418,7 +412,7 @@ void StopShaper(void) {
         total_dl_bytes / (1024.0 * 1024.0),
         total_ul_bytes,
         total_ul_bytes / (1024.0 * 1024.0),
-        g_app.last_stats.cap_reached ? L"\r\n*** DATA CAP REACHED ***" : L"",
+        g_app.last_stats.cap_reached ? T(GUI_STATS_DATA_CAP_HIT) : L"",
         (g_app.last_stats.cap_reached && quota_exhausted) ? L"\r\n" : L"",
         quota_exhausted ? quota_msg : L"");
 
@@ -493,29 +487,29 @@ void CenterWindow(HWND hWnd, HWND hParent) {
 
 // Clamp window to work area (DPI-related), to not overflow window
 void ClampWindowToWorkArea(HWND hWnd) {
-	RECT rcDlg;
-	GetWindowRect(hWnd, &rcDlg);
+    RECT rcDlg;
+    GetWindowRect(hWnd, &rcDlg);
 
-	HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
-	MONITORINFO mi = { sizeof(mi) };
-	GetMonitorInfo(hMon, &mi);
-	RECT wa = mi.rcWork;  // work area excludes taskbar
+    HMONITOR hMon = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = { sizeof(mi) };
+    GetMonitorInfo(hMon, &mi);
+    RECT wa = mi.rcWork;  // work area excludes taskbar
 
-	int dlgW = rcDlg.right - rcDlg.left;
-	int dlgH = rcDlg.bottom - rcDlg.top;
-	int waW = wa.right - wa.left;
-	int waH = wa.bottom - wa.top;
+    int dlgW = rcDlg.right - rcDlg.left;
+    int dlgH = rcDlg.bottom - rcDlg.top;
+    int waW = wa.right - wa.left;
+    int waH = wa.bottom - wa.top;
 
-	// Shrink if taller or wider than the work area
-	int newW = (dlgW > waW) ? waW : dlgW;
-	int newH = (dlgH > waH) ? waH : dlgH;
+    // Shrink if taller or wider than the work area
+    int newW = (dlgW > waW) ? waW : dlgW;
+    int newH = (dlgH > waH) ? waH : dlgH;
 
-	// Re-centre within work area at the clamped size
-	int newX = wa.left + (waW - newW) / 2;
-	int newY = wa.top  + (waH - newH) / 2;
+    // Re-centre within work area at the clamped size
+    int newX = wa.left + (waW - newW) / 2;
+    int newY = wa.top  + (waH - newH) / 2;
 
-	SetWindowPos(hWnd, NULL, newX, newY, newW, newH,
-				 SWP_NOZORDER | SWP_NOACTIVATE);
+    SetWindowPos(hWnd, NULL, newX, newY, newW, newH,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 // ---------------------------------------------------------------------------
@@ -1317,13 +1311,13 @@ void TrayShowMenu(HWND hWnd) {
     bool running = (g_app.shaper != NULL);
 
     bool visible = IsWindowVisible(hWnd);
-    AppendMenuW(hMenu, MF_STRING, ID_TRAY_SHOW, visible ? L"Hide" : L"Show");
+    AppendMenuW(hMenu, MF_STRING, ID_TRAY_SHOW, visible ? T(GUI_TRAY_HIDE) : T(GUI_TRAY_SHOW));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(hMenu, MF_STRING | (running ? MF_GRAYED : 0), ID_TRAY_START, L"Start");
-    AppendMenuW(hMenu, MF_STRING | (!running ? MF_GRAYED : 0), ID_TRAY_STOP, L"Stop");
+    AppendMenuW(hMenu, MF_STRING | (running ? MF_GRAYED : 0), ID_TRAY_START, T(GUI_START));
+    AppendMenuW(hMenu, MF_STRING | (!running ? MF_GRAYED : 0), ID_TRAY_STOP, T(GUI_STOP));
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(hMenu, MF_STRING, ID_TRAY_STATS, L"Statistics");
-    AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Exit");
+    AppendMenuW(hMenu, MF_STRING, ID_TRAY_STATS, T(GUI_STATISTICS));
+    AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, T(GUI_EXIT));
 
     SetForegroundWindow(hWnd);
 
@@ -1530,7 +1524,7 @@ void Settings_Save(void) {
                         wchar_t desc[128];
                         MultiByteToWideChar(CP_ACP, 0, p->Description, -1, desc, 128);
                         // Append to semicolon-separated list; escape any ';' in desc
-                        // (in practice adapter descriptions never contain ';')
+                        // (in practice, adapter descriptions never contain ';')
                         if (desc_list[0]) wcsncat(desc_list, L";", 1023 - wcslen(desc_list));
                         wcsncat(desc_list, desc, 1023 - wcslen(desc_list));
                         break;
@@ -1595,6 +1589,10 @@ void Settings_Save(void) {
     WritePrivateProfileStringW(S, L"ConfigDir", g_app.options.config_dir, auth_path);
     WritePrivateProfileStringW(S, L"SnapshotDir", g_app.options.snapshot_dir, auth_path);
 
+    // Language
+    swprintf(buf, 512, L"%d", (int)loc_get_language());
+    WritePrivateProfileStringW(S, L"Language", buf, auth_path);
+
     // SaveSettings written last so the file is coherent even if we crash midway
     WritePrivateProfileStringW(S, L"SaveSettings", L"1", auth_path);
 }
@@ -1642,6 +1640,15 @@ void Settings_Load(void) {
         GetPrivateProfileStringW(S, L"SnapshotDir", L"", buf, MAX_PATH, path);
         wcsncpy(g_app.options.snapshot_dir, buf, MAX_PATH - 1);
         g_app.options.snapshot_dir[MAX_PATH - 1] = L'\0';
+    }
+
+    // Load language first so the rest of the loading uses the correct locale
+    GetPrivateProfileStringW(S, L"Language", L"0", buf, 4, path);
+    {
+        int v = _wtoi(buf);
+        if (v >= 0 && v < _LOC_LANG_COUNT) {
+            loc_set_language((LangId)v);
+        }
     }
 
     // Has to happen before SaveSettings
@@ -1709,7 +1716,7 @@ void Settings_Load(void) {
                     // Record the first missing NIC name for a status-bar warning.
                     if (!g_app.missing_nic_warning[0]) {
                         swprintf(g_app.missing_nic_warning, 256,
-                                 L"Saved NIC not found: \"%s\" - check Options", tok);
+                                 T(GUI_WARN_MISSING_NIC), tok);
                     }
                 }
             }
@@ -1811,7 +1818,7 @@ void PopulateNicList(HWND hDlg) {
             if (pAdapter->IpAddressList.IpAddress.String[0] != '0') {
                 MultiByteToWideChar(CP_ACP, 0, pAdapter->IpAddressList.IpAddress.String, -1, ip, 32);
             } else {
-                wcscpy(ip, L"No IP");
+                wcscpy(ip, T(GUI_OPT_NIC_NO_IP));
             }
 
             swprintf(entry, 256, L"[%u] %s (%s)",
@@ -2236,6 +2243,45 @@ UINT ScheduleNextFireMs(void) {
     return (UINT)ms;
 }
 
+// Button sizing helper
+int MeasureButtonTextWidth(HWND hBtn, int padding) {
+    if (!hBtn || !IsWindow(hBtn)) return 0;
+
+    wchar_t text[256] = {0};
+    int len = GetWindowTextW(hBtn, text, 256);
+    if (len <= 0) return 0;
+
+    // Strip accelerator markers (&) so we measure only visible glyphs
+    // (&& becomes a literal & and is kept).
+    wchar_t clean[256] = {0};
+    int j = 0;
+    for (int i = 0; i < len && j < 255; i++) {
+        if (text[i] == L'&') {
+            if (i + 1 < len && text[i + 1] == L'&') {
+                clean[j++] = L'&';
+                i++;  // consume second '&'
+            }
+            // single '&' is skipped
+        } else {
+            clean[j++] = text[i];
+        }
+    }
+
+    HDC hdc = GetDC(hBtn);
+    if (!hdc) return 0;
+
+    HFONT hFont = (HFONT)SendMessage(hBtn, WM_GETFONT, 0, 0);
+    HFONT hOldFont = hFont ? (HFONT)SelectObject(hdc, hFont) : NULL;
+
+    SIZE sz = {0};
+    GetTextExtentPoint32W(hdc, clean, j, &sz);
+
+    if (hOldFont) SelectObject(hdc, hOldFont);
+    ReleaseDC(hBtn, hdc);
+
+    return sz.cx + padding * 2;
+}
+
 // ---------------------------------------------------------------------------
 // Layout
 // ---------------------------------------------------------------------------
@@ -2257,10 +2303,29 @@ void LayoutMainWindow(HWND hWnd) {
     HWND hStop = GetDlgItem(hWnd, IDC_STOP_BTN);
     HWND hReload = GetDlgItem(hWnd, IDC_RELOAD_BTN);
 
-    SetWindowPos(hStart, NULL, margin, S(8), S(60), S(24), SWP_NOZORDER);
-    SetWindowPos(hStop, NULL, margin + S(70), S(8), S(60), S(24), SWP_NOZORDER);
-    SetWindowPos(hReload, NULL, margin + S(140), S(8), S(60), S(24), SWP_NOZORDER);
-    SetWindowPos(g_app.hUnitCombo, NULL, margin + S(220), S(8), comboWidth, S(24), SWP_NOZORDER);
+    int btnY = S(8);
+    int btnH = S(24);
+    int x = margin;
+
+    if (hStart) {
+        int w = MeasureButtonTextWidth(hStart, S(10));
+        if (w < S(60)) w = S(60);
+        SetWindowPos(hStart, NULL, x, btnY, w, btnH, SWP_NOZORDER);
+        x += w + margin;
+    }
+    if (hStop) {
+        int w = MeasureButtonTextWidth(hStop, S(10));
+        if (w < S(60)) w = S(60);
+        SetWindowPos(hStop, NULL, x, btnY, w, btnH, SWP_NOZORDER);
+        x += w + margin;
+    }
+    if (hReload) {
+        int w = MeasureButtonTextWidth(hReload, S(10));
+        if (w < S(60)) w = S(60);
+        SetWindowPos(hReload, NULL, x, btnY, w, btnH, SWP_NOZORDER);
+        x += w + margin;
+    }
+    SetWindowPos(g_app.hUnitCombo, NULL, x, btnY, comboWidth, btnH, SWP_NOZORDER);
 
     // Process list
     SetWindowPos(g_app.hProcessList, NULL, margin, toolbarHeight + margin,
@@ -2275,10 +2340,147 @@ void LayoutMainWindow(HWND hWnd) {
     // Reflow status bar part widths to match new window width
     {
         int parts[3];
-        parts[0] = S(200);
+        parts[0] = S(300);
         parts[1] = rcClient.right - S(180);  // process count part grows with window
         parts[2] = -1;
         SendMessage(g_app.hStatusBar, SB_SETPARTS, 3, (LPARAM)parts);
+    }
+}
+
+void ApplyRCMenuStrings(HWND hWnd) {
+    HMENU hBar = GetMenu(hWnd);
+    if (!hBar) return;
+
+    MENUITEMINFOW mii = {0};
+    mii.cbSize = sizeof(mii);
+    mii.fMask = MIIM_STRING;
+
+    // File Submenu
+    mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_FILE); SetMenuItemInfoW(hBar, 0, TRUE, &mii);
+    HMENU hFile = GetSubMenu(hBar, 0);
+    mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_FILE_LOCATE_PROC); SetMenuItemInfoW(hFile, ID_FILE_LOCATE_PROC, FALSE, &mii);
+    mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_FILE_SPECIFY_PROC); SetMenuItemInfoW(hFile, ID_FILE_SPECIFY_PROC, FALSE, &mii);
+    mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_FILE_REMOVE_CUSTOM); SetMenuItemInfoW(hFile, ID_FILE_REMOVE_CUSTOM, FALSE, &mii);
+    mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_FILE_EXIT); SetMenuItemInfoW(hFile, ID_FILE_EXIT, FALSE, &mii);
+
+    // View Submenu
+    mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW); SetMenuItemInfoW(hBar, 1, TRUE, &mii);
+    HMENU hView = GetSubMenu(hBar, 1);
+    mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_REFRESH); SetMenuItemInfoW(hView, ID_VIEW_REFRESH, FALSE, &mii);
+    mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_EXPAND_ALL); SetMenuItemInfoW(hView, ID_VIEW_EXPAND_ALL, FALSE, &mii);
+    mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_COLLAPSE_ALL); SetMenuItemInfoW(hView, ID_VIEW_COLLAPSE_ALL, FALSE, &mii);
+
+    // View > Update Frequency (Pop-up)
+    HMENU hFreq = NULL;
+    for (int i = 0; i < GetMenuItemCount(hView); i++) {
+        HMENU sub = GetSubMenu(hView, i);
+        // Check if this item opens a submenu containing frequency options
+        if (sub && GetMenuState(sub, ID_FREQ_OFTEN, MF_BYCOMMAND) != (UINT)-1) {
+            mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_FREQ); // Caption of the parent item
+            SetMenuItemInfoW(hView, i, TRUE, &mii);
+            hFreq = sub;
+            break;
+        }
+    }
+
+    if (hFreq) {
+        mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_FREQ_OFTEN); SetMenuItemInfoW(hFreq, ID_FREQ_OFTEN, FALSE, &mii);
+        mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_FREQ_NORMAL); SetMenuItemInfoW(hFreq, ID_FREQ_NORMAL, FALSE, &mii);
+        mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_FREQ_SLOWER); SetMenuItemInfoW(hFreq, ID_FREQ_SLOWER, FALSE, &mii);
+        mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_FREQ_SCARCELY); SetMenuItemInfoW(hFreq, ID_FREQ_SCARCELY, FALSE, &mii);
+        mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_FREQ_RARELY); SetMenuItemInfoW(hFreq, ID_FREQ_RARELY, FALSE, &mii);
+        mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_FREQ_DISABLED); SetMenuItemInfoW(hFreq, ID_FREQ_DISABLED, FALSE, &mii);
+    }
+
+    // View > Processes (Pop-up)
+    HMENU hProc = NULL;
+    for (int i = 0; i < GetMenuItemCount(hView); i++) {
+        HMENU sub = GetSubMenu(hView, i);
+        if (sub && GetMenuState(sub, ID_PROC_SHOW_ALL, MF_BYCOMMAND) != (UINT)-1) {
+            mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_PROC); // Caption
+            SetMenuItemInfoW(hView, i, TRUE, &mii);
+            hProc = sub;
+            break;
+        }
+    }
+    if (hProc) {
+        mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_PROC_SHOW_ALL); SetMenuItemInfoW(hProc, ID_PROC_SHOW_ALL, FALSE, &mii);
+        mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_PROC_SHOW_CUSTOM); SetMenuItemInfoW(hProc, ID_PROC_SHOW_CUSTOM, FALSE, &mii);
+        mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_PROC_SHOW_RUNNING); SetMenuItemInfoW(hProc, ID_PROC_SHOW_RUNNING, FALSE, &mii);
+    }
+
+    // View > Options + View > Statistics
+    mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_OPTIONS); SetMenuItemInfoW(hView, ID_VIEW_OPTIONS, FALSE, &mii);
+    mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_VIEW_STATS); SetMenuItemInfoW(hView, ID_VIEW_STATS, FALSE, &mii);
+
+    // Help Submenu
+    mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_HELP); SetMenuItemInfoW(hBar, 2, TRUE, &mii);
+    HMENU hHelp = GetSubMenu(hBar, 2);
+    mii.dwTypeData = (LPWSTR)T(GUI_RC_MENU_HELP_ABOUT); SetMenuItemInfoW(hHelp, ID_HELP_ABOUT, FALSE, &mii);
+
+    DrawMenuBar(hWnd);
+}
+
+void ApplyLanguageChange(HWND hOptionsDlg) {
+    InitUnitLabels();
+    ApplyRCMenuStrings(g_app.hMainWnd);
+
+    // Toolbar buttons
+    HWND hStart = GetDlgItem(g_app.hMainWnd, IDC_START_BTN);
+    HWND hStop = GetDlgItem(g_app.hMainWnd, IDC_STOP_BTN);
+    HWND hReload = GetDlgItem(g_app.hMainWnd, IDC_RELOAD_BTN);
+    if (hStart) SetWindowTextW(hStart, T(GUI_START));
+    if (hStop) SetWindowTextW(hStop, T(GUI_STOP));
+    if (hReload) SetWindowTextW(hReload, T(GUI_RELOAD));
+
+    // Relayout, so translated buttons don't clip
+    LayoutMainWindow(g_app.hMainWnd);
+
+    // Unit selector
+    if (g_app.hUnitCombo) {
+        int curSel = (int)SendMessage(g_app.hUnitCombo, CB_GETCURSEL, 0, 0);
+        SendMessage(g_app.hUnitCombo, CB_RESETCONTENT, 0, 0);
+        for (int i = 0; i < UNIT_COUNT; i++) {
+            SendMessageW(g_app.hUnitCombo, CB_ADDSTRING, 0, (LPARAM)UNIT_LABELS[i]);
+        }
+        SendMessage(g_app.hUnitCombo, CB_SETCURSEL, (curSel >= 0) ? curSel : g_app.current_unit, 0);
+    }
+
+    // ListView column headers
+    RefreshProcessListColumns();
+
+    // Status bar (static text only when idle)
+    if (g_app.hStatusBar) {
+        if (!g_app.shaper || !shaper_is_running(g_app.shaper)) {
+            SendMessageW(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)T(GUI_STATUS_READY));
+        }
+    }
+
+    // Refresh the Options dialog itself if it's still open
+    if (hOptionsDlg && IsWindow(hOptionsDlg)) {
+        RefreshOptionsDlgStrings(hOptionsDlg);
+    }
+
+    // Refresh Statistics dialog if open
+    if (g_app.hStatsWnd && IsWindow(g_app.hStatsWnd)) {
+        RefreshStatsDlgStrings(g_app.hStatsWnd);
+        // Recalculate button widths for the new language
+        RECT rc;
+        GetClientRect(g_app.hStatsWnd, &rc);
+        SendMessage(g_app.hStatsWnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(rc.right, rc.bottom));
+        InvalidateRect(g_app.hStatsWnd, NULL, TRUE);
+    }
+
+    InvalidateRect(g_app.hMainWnd, NULL, TRUE);
+    RedrawWindow(g_app.hMainWnd, NULL, NULL, RDW_ERASE | RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
+    if (hOptionsDlg && IsWindow(hOptionsDlg)) {
+        InvalidateRect(hOptionsDlg, NULL, TRUE);
+    }
+    if (g_app.hStatsWnd && IsWindow(g_app.hStatsWnd)) {
+        RECT rc;
+        GetClientRect(g_app.hStatsWnd, &rc);
+        SendMessage(g_app.hStatsWnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(rc.right, rc.bottom));
+        InvalidateRect(g_app.hStatsWnd, NULL, TRUE);
     }
 }
 
@@ -2397,9 +2599,9 @@ BOOL onCommand(HWND hWnd, WPARAM wParam, LPARAM lParam) {
         return 0;
 
     case ID_HELP_ABOUT:
-        wchar_t buff[256];
-        swprintf(buff, 256, L"BandwidthShaper " APP_VERSION L"\nAdvanced Traffic Shaper");
-        MSGBOX(hWnd, buff, L"About", MB_OK);
+        wchar_t buff[1024];
+        swprintf(buff, 1024, T(GUI_CAP_MSG), APP_VERSION);
+        MSGBOX(hWnd, buff, T(GUI_CAP_ABOUT), MB_OK);
         return 0;
     }
 
@@ -2410,7 +2612,7 @@ BOOL onCommand(HWND hWnd, WPARAM wParam, LPARAM lParam) {
             EnableWindow(GetDlgItem(hWnd, IDC_START_BTN), FALSE);
             EnableWindow(GetDlgItem(hWnd, IDC_STOP_BTN), TRUE);
             EnableWindow(GetDlgItem(hWnd, IDC_RELOAD_BTN), TRUE);
-            SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Shaper running");
+            SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)T(GUI_STATUS_RUNNING));
         }
         return 0;
 
@@ -2419,31 +2621,28 @@ BOOL onCommand(HWND hWnd, WPARAM wParam, LPARAM lParam) {
         EnableWindow(GetDlgItem(hWnd, IDC_START_BTN), TRUE);
         EnableWindow(GetDlgItem(hWnd, IDC_STOP_BTN), FALSE);
         EnableWindow(GetDlgItem(hWnd, IDC_RELOAD_BTN), FALSE);
-        SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Stopped");
+        SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)T(GUI_STATUS_STOPPED));
         return 0;
 
     case IDC_RELOAD_BTN:
         if (g_app.shaper && shaper_is_running(g_app.shaper)) {
             if (ReloadShaperConfig()) {
-                SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Configuration reloaded");
+                SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)T(GUI_STATUS_RELOADED));
             } else {
-                char err[512];
-                snprintf(err, 512, "Reload failed: %s",
-                        shaper_get_last_error(g_app.shaper));
-                wchar_t werr[512];
-                MultiByteToWideChar(CP_UTF8, 0, err, -1, werr, 512);
-                MSGBOX(hWnd, werr, L"Reload Error", MB_OK | MB_ICONERROR);
+                wchar_t err[512];
+                swprintf(err, 512, T(GUI_RELOAD_FAILED), shaper_get_last_error(g_app.shaper));
+                MSGBOX(hWnd, err, T(GUI_RELOAD_ERROR), MB_OK | MB_ICONERROR);
 
                 // Fallback
                 StopShaper();
                 if (StartShaper()) {
-                    SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Configuration reloaded (fallback)");
+                    SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)T(GUI_STATUS_RELOADED_F));
                 }
             }
         } else {
             // Shaper not running - just start
             if (StartShaper()) {
-                SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Configuration reloaded");
+                SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)T(GUI_STATUS_RELOADED));
             }
         }
         return 0;
@@ -2498,7 +2697,7 @@ BOOL onCommand(HWND hWnd, WPARAM wParam, LPARAM lParam) {
             EnableWindow(GetDlgItem(hWnd, IDC_START_BTN), FALSE);
             EnableWindow(GetDlgItem(hWnd, IDC_STOP_BTN), TRUE);
             EnableWindow(GetDlgItem(hWnd, IDC_RELOAD_BTN), TRUE);
-            SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Shaper running");
+            SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)T(GUI_STATUS_RUNNING));
         }
         return 0;
 
@@ -2507,7 +2706,7 @@ BOOL onCommand(HWND hWnd, WPARAM wParam, LPARAM lParam) {
         EnableWindow(GetDlgItem(hWnd, IDC_START_BTN), TRUE);
         EnableWindow(GetDlgItem(hWnd, IDC_STOP_BTN), FALSE);
         EnableWindow(GetDlgItem(hWnd, IDC_RELOAD_BTN), FALSE);
-        SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)L"Stopped");
+        SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)T(GUI_STATUS_STOPPED));
         return 0;
 
     case ID_TRAY_STATS:
@@ -2595,10 +2794,10 @@ LRESULT onCreate(HWND hWnd) {
     g_app.process_lock_initialized = true;
 
     // Initialize after Settings got loaded
+    InitUnitLabels();                    // populate UNIT_LABELS from the active locale
+    ApplyRCMenuStrings(hWnd);            // apply locale strings to main menu bar
     InitializeMainWindow(hWnd);
     ApplyProcFilter(g_app.proc_filter);  // Only after ListView
-
-
 
     // Try/catch-style protection for remaining initialization
     bool init_success = true;
@@ -2626,6 +2825,7 @@ LRESULT onCreate(HWND hWnd) {
 
     if (g_app.minimize_to_tray) TrayAdd(hWnd);
     RefreshProcessList();
+    AutoSizeProcessListColumns();
 
     if (!init_success) {
         // Clean up on partial initialization failure
@@ -2726,9 +2926,9 @@ LRESULT onUahDrawMenuItem(HWND hWnd, WPARAM wParam, LPARAM lParam) {
     // Get and draw item text
     wchar_t buf[256] = {0};
     MENUITEMINFOW mii = { sizeof(mii) };
-    mii.fMask    = MIIM_STRING;
+    mii.fMask = MIIM_STRING;
     mii.dwTypeData = buf;
-    mii.cch      = 256;
+    mii.cch = 256;
     GetMenuItemInfoW(umi->um.hmenu, umi->umi.iPosition, TRUE, &mii);
     SetBkMode(umi->um.hdc, TRANSPARENT);
     SetTextColor(umi->um.hdc, fg);
@@ -2800,13 +3000,9 @@ LRESULT onDpiChanged(HWND hWnd, WPARAM wParam, LPARAM lParam) {
 
     // Reflow everything
     ApplyFontToChildren(hWnd);
+
     // Rebuild column widths in the ListView
-    struct { int width; } cols[] = {
-        {S(170)},{S(55)},{S(75)},{S(75)},
-        {S(75)},{S(75)},{S(80)},{S(80)},{S(100)},{S(70)}
-    };
-    for (int i = 0; i < 10; i++)
-        ListView_SetColumnWidth(g_app.hProcessList, i, cols[i].width);
+    AutoSizeProcessListColumns();
 
     // Reapply current selection so the combo face shows the right text after font change
     SendMessage(g_app.hUnitCombo, CB_SETCURSEL, (WPARAM)g_app.current_unit, 0);

@@ -100,7 +100,7 @@ typedef struct {
     uint64_t packets_dropped_rate_limit;
     uint64_t packets_dropped_loss;
     uint64_t packets_delayed;
-    uint64_t bytes_processed;        // Total bytes processed (including dropped?)
+    uint64_t bytes_processed;        // Total bytes processed
     uint64_t bytes_throttled;        // Bytes that passed through throttle
     uint64_t invalid_packets;
     bool is_running;
@@ -206,11 +206,11 @@ bool shaper_reload(ShaperInstance *shaper, const ShaperConfig *config);
 // Returns true between shaper_start() and shaper_stop().
 bool shaper_is_running(const ShaperInstance *shaper);
 
-// Fill *out with an atomic snapshot of current statistics.
-void shaper_get_stats(ShaperInstance *shaper, ShaperStats *out);
-
 // Returns the last error string set by the core (never NULL).
 const char *shaper_get_last_error(const ShaperInstance *shaper);
+
+// Fill *out with an atomic snapshot of current statistics.
+void shaper_get_stats(ShaperInstance *shaper, ShaperStats *out);
 
 // -----------------------------------------------------------------------
 // Per-process rule management (called before shaper_start)

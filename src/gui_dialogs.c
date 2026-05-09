@@ -8,6 +8,7 @@
 #include "resource.h"
 #include "shaper_core.h"
 #include "schedule.h"
+#include "localization_api.h"
 #include <richedit.h>
 #include <commdlg.h>
 #include <shlobj.h>
@@ -64,14 +65,182 @@ static int CALLBACK BrowseCallbackProc(HWND hwnd, UINT uMsg, LPARAM lParam, LPAR
     return 0;
 }
 
+void RefreshOptionsDlgStrings(HWND hDlg) {
+    SetWindowTextW(hDlg, T(GUI_RC_OPTIONS_CAP));
+    SetDlgItemTextW(hDlg, IDC_OPT_GRP_GLOBAL_LIMITS, T(GUI_RC_OPT_GRP_GLOBAL_LIMITS));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_DOWNLOAD, T(GUI_RC_OPT_LBL_DOWNLOAD));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_DL_UNLIMITED, T(GUI_RC_OPT_LBL_DL_UNLIMITED));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_UPLOAD, T(GUI_RC_OPT_LBL_UPLOAD));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_UL_UNLIMITED, T(GUI_RC_OPT_LBL_UL_UNLIMITED));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_DATA_CAP, T(GUI_RC_OPT_LBL_DATA_CAP));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_DATA_CAP_UNLIM, T(GUI_RC_OPT_LBL_DATA_CAP_UNLIM));
+    SetDlgItemTextW(hDlg, IDC_OPT_GRP_NIC_INTERFACES, T(GUI_RC_OPT_GRP_NIC_INTERFACES));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_NIC_SELECTED, T(GUI_RC_OPT_LBL_NIC_SELECTED));
+    SetDlgItemTextW(hDlg, IDC_OPT_GRP_BUFFER_SETTINGS, T(GUI_RC_OPT_GRP_BUFFER_SETTINGS));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_DL_BUFFER, T(GUI_RC_OPT_LBL_DL_BUFFER));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_BYTES, T(GUI_RC_OPT_LBL_BYTES));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_UL_BUFFER, T(GUI_RC_OPT_LBL_UL_BUFFER));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_BYTES2, T(GUI_RC_OPT_LBL_BYTES));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_BURST_SIZE, T(GUI_RC_OPT_LBL_BURST_SIZE));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_BURST_AUTO, T(GUI_RC_OPT_LBL_BURST_AUTO));
+    SetDlgItemTextW(hDlg, IDC_OPT_GRP_UPDATE_INTERVAL, T(GUI_RC_OPT_GRP_UPDATE_INTERVAL));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_UPDATE_EVERY, T(GUI_RC_OPT_LBL_UPDATE_EVERY));
+    SetDlgItemTextW(hDlg, IDC_OPT_UPDATE_TYPE, T(GUI_RC_OPT_RADIO_PACKETS));
+    SetDlgItemTextW(hDlg, IDC_OPT_UPDATE_TYPE + 1, T(GUI_RC_OPT_RADIO_MS));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_COOLDOWN, T(GUI_RC_OPT_LBL_COOLDOWN));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_MS, T(GUI_RC_OPT_LBL_MS));
+    SetDlgItemTextW(hDlg, IDC_OPT_GRP_ADVANCED, T(GUI_RC_OPT_GRP_ADVANCED));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_TCP_LIMIT, T(GUI_RC_OPT_LBL_TCP_LIMIT));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_TCP_UNLIM, T(GUI_RC_OPT_LBL_TCP_UNLIM));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_UDP_LIMIT, T(GUI_RC_OPT_LBL_UDP_LIMIT));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_UDP_UNLIM, T(GUI_RC_OPT_LBL_UDP_UNLIM));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_LATENCY, T(GUI_RC_OPT_LBL_LATENCY));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_MS2, T(GUI_RC_OPT_LBL_MS));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_PACKET_LOSS, T(GUI_RC_OPT_LBL_PACKET_LOSS));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_PERCENT, T(GUI_RC_OPT_LBL_PERCENT));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_PRIORITY, T(GUI_RC_OPT_LBL_PRIORITY));
+    SetDlgItemTextW(hDlg, IDC_OPT_GRP_LANGUAGE, T(GUI_RC_OPT_GRP_LANGUAGE));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_LANGUAGE, T(GUI_RC_OPT_LBL_LANGUAGE));
+    SetDlgItemTextW(hDlg, IDC_OPT_GRP_BEHAVIOR, T(GUI_RC_OPT_GRP_BEHAVIOR));
+    SetDlgItemTextW(hDlg, IDC_OPT_MINIMIZE_TRAY, T(GUI_RC_OPT_CHK_MINIMIZE_TRAY));
+    SetDlgItemTextW(hDlg, IDC_OPT_SAVE_SETTINGS, T(GUI_RC_OPT_CHK_SAVE_SETTINGS));
+    SetDlgItemTextW(hDlg, IDC_OPT_SAVE_STICKY_SETTINGS, T(GUI_RC_OPT_CHK_SAVE_STICKY));
+    SetDlgItemTextW(hDlg, IDC_OPT_GRP_FILE_PATHS, T(GUI_RC_OPT_GRP_FILE_PATHS));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_CONFIG_FOLDER, T(GUI_RC_OPT_LBL_CONFIG_FOLDER));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_CONFIG_HINT, T(GUI_RC_OPT_LBL_CONFIG_HINT));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_SNAPSHOT_FOLDER, T(GUI_RC_OPT_LBL_SNAPSHOT_FOLDER));
+    SetDlgItemTextW(hDlg, IDC_OPT_LBL_SNAPSHOT_HINT, T(GUI_RC_OPT_LBL_SNAPSHOT_HINT));
+    SetDlgItemTextW(hDlg, IDOK, T(GUI_RC_BTN_OK));
+    SetDlgItemTextW(hDlg, IDCANCEL, T(GUI_RC_BTN_CANCEL));
+
+    // Refresh language dropdown items
+    HWND hLang = GetDlgItem(hDlg, IDC_OPT_LANGUAGE);
+    if (hLang) {
+        int currentSel = (int)SendMessage(hLang, CB_GETCURSEL, 0, 0);
+        SendMessage(hLang, CB_RESETCONTENT, 0, 0);
+        for (int lid = 0; lid < _LOC_LANG_COUNT; lid++) {
+            SendMessageW(hLang, CB_ADDSTRING, 0, (LPARAM)loc_language_name((LangId)lid));
+        }
+        SendMessage(hLang, CB_SETCURSEL, (WPARAM)currentSel, 0);
+    }
+
+    // Rebuild column widths in the ListView
+    AutoSizeProcessListColumns();
+
+    // Tooltips
+    {
+        // Clean up tooltips if they already exist
+        HWND hTip = (HWND)GetWindowLongPtr(hDlg, GWLP_USERDATA);
+        if (hTip && IsWindow(hTip)) {
+            DestroyWindow(hTip);
+            SetWindowLongPtr(hDlg, GWLP_USERDATA, 0);
+        }
+
+        // Create new tooltip
+        const TooltipDef tips[] = {
+            // Global Bandwidth Limits
+            { IDC_OPT_DL_GLOBAL,
+              T(GUI_TIP_DL_GLOBAL) },
+            { IDC_OPT_UL_GLOBAL,
+              T(GUI_TIP_UL_GLOBAL) },
+
+            // Buffer Settings
+            { IDC_OPT_DL_BUFFER,
+              T(GUI_TIP_DL_BUFFER) },
+            { IDC_OPT_UL_BUFFER,
+              T(GUI_TIP_UL_BUFFER) },
+            { IDC_OPT_BURST_SIZE,
+              T(GUI_TIP_BURST) },
+
+            // Process Update Interval
+            { IDC_OPT_UPDATE_INTERVAL,
+              T(GUI_TIP_UPDATE_INTERVAL) },
+            { IDC_OPT_UPDATE_TYPE,        // Packets radio
+              T(GUI_TIP_UPDATE_PACKETS) },
+            { IDC_OPT_UPDATE_TYPE + 1,    // Milliseconds radio
+              T(GUI_TIP_UPDATE_MS) },
+            { IDC_OPT_UPDATE_COOLDOWN,
+              T(GUI_TIP_COOLDOWN) },
+
+            // Advanced
+            { IDC_OPT_DATA_CAP,
+              T(GUI_TIP_DATA_CAP) },
+            { IDC_OPT_TCP_LIMIT,
+              T(GUI_TIP_TCP_LIMIT) },
+            { IDC_OPT_UDP_LIMIT,
+              T(GUI_TIP_UDP_LIMIT) },
+            { IDC_OPT_LATENCY,
+              T(GUI_TIP_LATENCY) },
+            { IDC_OPT_PACKET_LOSS,
+              T(GUI_TIP_PACKET_LOSS) },
+            { IDC_OPT_PRIORITY,
+              T(GUI_TIP_PRIORITY) },
+
+            // Network Interfaces
+            { IDC_OPT_NIC_LIST,
+              T(GUI_TIP_NIC_LIST) },
+
+            // Behavior
+            { IDC_OPT_MINIMIZE_TRAY,
+              T(GUI_TIP_MINIMIZE_TRAY) },
+            { IDC_OPT_SAVE_SETTINGS,
+              T(GUI_TIP_SAVE_SETTINGS) },
+            { IDC_OPT_SAVE_STICKY_SETTINGS,
+              T(GUI_TIP_SAVE_STICKY) },
+            { IDC_OPT_CONFIG_DIR,
+              T(GUI_TIP_CONFIG_DIR) },
+            { IDC_OPT_SNAPSHOT_DIR,
+              T(GUI_TIP_SNAPSHOT_DIR) },
+
+            // Language
+            { IDC_OPT_LANGUAGE,
+              T(GUI_TIP_LANGUAGE) },
+        };
+
+        // Store tooltip handle in dialog user data
+        HWND hNewTip = CreateTooltips(hDlg, tips, sizeof(tips)/sizeof(tips[0]));
+        SetWindowLongPtr(hDlg, GWLP_USERDATA, (LONG_PTR)hNewTip);
+
+        // After creating the tooltip, if in dark mode
+        if (g_app.dark_mode) {
+            SetWindowTheme(hNewTip, L"DarkMode_Explorer", NULL);
+            SendMessage(hNewTip, TTM_SETTIPBKCOLOR, (WPARAM)g_app.dark_list_bg, 0);
+            SendMessage(hNewTip, TTM_SETTIPTEXTCOLOR, (WPARAM)g_app.dark_text, 0);
+        }
+    }
+}
+
+void RefreshStatsDlgStrings(HWND hDlg) {
+        SetWindowTextW(hDlg, T(GUI_RC_STATS_CAP));
+        SetDlgItemTextW(hDlg, IDC_STATS_LBL_DL_HISTORY, T(GUI_RC_STATS_LBL_DL_HISTORY));
+        SetDlgItemTextW(hDlg, IDC_STATS_LBL_UL_HISTORY, T(GUI_RC_STATS_LBL_UL_HISTORY));
+        SetDlgItemTextW(hDlg, IDC_STATS_LBL_PROC_TRAFFIC, T(GUI_RC_STATS_LBL_PROC_TRAFFIC));
+        SetDlgItemTextW(hDlg, IDC_STATS_LBL_STATS, T(GUI_RC_STATS_LBL_STATS));
+        SetDlgItemTextW(hDlg, IDC_STATS_BTN_SAVE, T(GUI_RC_STATS_BTN_SAVE));
+        SetDlgItemTextW(hDlg, IDC_STATS_BTN_RESET, T(GUI_RC_STATS_BTN_RESET));
+        SetDlgItemTextW(hDlg, IDCLOSE, T(GUI_RC_BTN_CLOSE));
+}
+
+void RefreshSpecifyProcDlgStrings(HWND hDlg) {
+        SetWindowTextW(hDlg, T(GUI_RC_SPECIFY_CAP));
+        SetDlgItemTextW(hDlg, IDC_SPECIFY_PROMPT, T(GUI_RC_SPECIFY_PROMPT));
+        SetDlgItemTextW(hDlg, IDOK, T(GUI_RC_BTN_ADD));
+        SetDlgItemTextW(hDlg, IDCANCEL, T(GUI_RC_BTN_CANCEL));
+}
+
 // ---------------------------------------------------------------------------
 // Options dialog
 // ---------------------------------------------------------------------------
 INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
+    static LangId s_lang_on_entry = LOC_LANG_EN;
     (void)lParam;
 
     switch (msg) {
     case WM_INITDIALOG: {
+        // Apply translatable strings to all static controls and group boxes
+        s_lang_on_entry = loc_get_language();
+        RefreshOptionsDlgStrings(hDlg);
+
         // Initialize controls with current values
         SetDlgItemInt(hDlg, IDC_OPT_DL_BUFFER, g_app.options.dl_buffer, FALSE);
         SetDlgItemInt(hDlg, IDC_OPT_UL_BUFFER, g_app.options.ul_buffer, FALSE);
@@ -120,6 +289,12 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
         SetDlgItemTextW(hDlg, IDC_OPT_CONFIG_DIR,   g_app.options.config_dir);
         SetDlgItemTextW(hDlg, IDC_OPT_SNAPSHOT_DIR, g_app.options.snapshot_dir);
 
+        // Language dropdown
+        HWND hLang = GetDlgItem(hDlg, IDC_OPT_LANGUAGE);
+        if (hLang) {
+            SendMessage(hLang, CB_SETCURSEL, (WPARAM)loc_get_language(), 0);
+        }
+
         // Apply dark mode to this dialog if enabled
         if (g_app.dark_mode) {
             ApplyDarkModeToDialog(hDlg);
@@ -162,114 +337,42 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
             EnableWindow(hList, TRUE);
         }
 
-        CenterWindow(hDlg, GetParent(hDlg));
-        ClampWindowToWorkArea(hDlg);
-
-        // Tooltips
+        // Resize OK / Cancel to fit translated text, keeping them right-aligned
         {
-            static const TooltipDef tips[] = {
-                // Global Bandwidth Limits
-                { IDC_OPT_DL_GLOBAL,
-                  L"Maximum total inbound bandwidth across all processes combined.\n"
-                  L"0 = no global limit (per-process limits still apply)." },
-                { IDC_OPT_UL_GLOBAL,
-                  L"Maximum total outbound bandwidth across all processes combined.\n"
-                  L"0 = no global limit (per-process limits still apply)." },
+            HWND hOK = GetDlgItem(hDlg, IDOK);
+            HWND hCancel = GetDlgItem(hDlg, IDCANCEL);
+            int pad = S(10);
+            int minW = S(60);
 
-                // Buffer Settings
-                { IDC_OPT_DL_BUFFER,
-                  L"Size of the internal packet buffer for inbound traffic, in bytes.\n"
-                  L"Larger values smooth out bursty traffic but increase memory use.\n"
-                  L"Typical range: 65536 - 524288." },
-                { IDC_OPT_UL_BUFFER,
-                  L"Size of the internal packet buffer for outbound traffic, in bytes.\n"
-                  L"Larger values smooth out bursty traffic but increase memory use.\n"
-                  L"Typical range: 65536 - 524288." },
-                { IDC_OPT_BURST_SIZE,
-                  L"Maximum number of bytes a process may send in a single burst before throttling kicks in.\n"
-				  L"0 = chosen automatically based on the active limit.\n"
-                  L"Increase this if limited connections feel laggy;\n"
-				  L"decrease to enforce stricter pacing." },
+            int wOK = hOK ? MeasureButtonTextWidth(hOK, pad) : minW;
+            if (wOK < minW) wOK = minW;
+            int wCancel = hCancel ? MeasureButtonTextWidth(hCancel, pad) : minW;
+            if (wCancel < minW) wCancel = minW;
 
-                // Process Update Interval
-                { IDC_OPT_UPDATE_INTERVAL,
-                  L"How often the shaper re-evaluates traffic and applies limits.\n"
-                  L"In Packets mode: trigger after this many packets.\n"
-                  L"In Milliseconds mode: trigger every this many ms.\n"
-                  L"Lower = more responsive, but higher CPU use." },
-                { IDC_OPT_UPDATE_TYPE,        // Packets radio
-                  L"Trigger a traffic update after a fixed number of packets.\n"
-                  L"Good for high-packet-rate connections (gaming, VoIP)." },
-                { IDC_OPT_UPDATE_TYPE + 1,    // Milliseconds radio
-                  L"Trigger a traffic update on a fixed time interval.\n"
-                  L"Good for bulk transfers (downloads, streaming)." },
-                { IDC_OPT_UPDATE_COOLDOWN,
-                  L"Minimum time in milliseconds that must elapse between two consecutive "
-                  L"traffic updates, regardless of the interval setting above. "
-                  L"Prevents thrashing when many small packets arrive at once." },
+            RECT rcClient;
+            GetClientRect(hDlg, &rcClient);
+            int spacing = S(8);
+            int x = rcClient.right - S(16);  // right margin
 
-                // Advanced
-                { IDC_OPT_DATA_CAP,
-                  L"Session-wide data cap in megabytes. Once total traffic (in + out)\n"
-                  L"exceeds this value the shaper blocks all further traffic.\n"
-                  L"0 = no cap. Resets when the shaper is stopped and restarted." },
-                { IDC_OPT_TCP_LIMIT,
-                  L"Maximum number of simultaneous TCP connections allowed per process. "
-                  L"New connections beyond this limit are dropped.\n"
-                  L"0 = no connection limit." },
-                { IDC_OPT_UDP_LIMIT,
-                  L"Maximum number of simultaneous UDP flows allowed per process. "
-                  L"New flows beyond this limit are dropped.\n"
-                  L"0 = no flow limit." },
-                { IDC_OPT_LATENCY,
-                  L"Artificial delay added to every packet, in milliseconds.\n"
-                  L"Useful for testing application behaviour under high-latency conditions.\n"
-                  L"0 = no added latency." },
-                { IDC_OPT_PACKET_LOSS,
-                  L"Percentage of packets to drop randomly (0.00 - 100.00).\n"
-                  L"Simulates an unreliable network link.\n"
-                  L"0 = no packet loss." },
-                { IDC_OPT_PRIORITY,
-                  L"The priority set for WinDivert itself (-30000 lowest to 30000 highest). "
-                  L"Negative values deprioritise traffic; positive values prioritise it.\n"
-                  L"-30000 = lowest, -15000 = low, 0 = normal,\n"
-				  L"15000 = high, 30000 = highest." },
-
-                // Network Interfaces
-                { IDC_OPT_NIC_LIST,
-                  L"Select one or more network adapters to monitor and shape.\n"
-                  L"The list is disabled while the shaper is running." },
-
-                // Behavior
-                { IDC_OPT_MINIMIZE_TRAY,
-                  L"When minimized, hide the window and show only a system tray icon. "
-                  L"Double-click the tray icon to restore." },
-                { IDC_OPT_SAVE_SETTINGS,
-                  L"Save all current Options values to BandwidthShaper.cfg\n"
-                  L"when the program exits, and reload them on next launch." },
-                { IDC_OPT_SAVE_STICKY_SETTINGS,
-                  L"Save the sticky process list (pinned processes and their limits)\n"
-                  L"to BandwidthShaper.cfg on exit, and restore them on next launch.\n"
-                  L"Does require 'Remember settings on exit' to also be checked." },
-                { IDC_OPT_CONFIG_DIR,
-                  L"Save the config file to this location when the program exits,\n"
-                  L"and reload them using that path next launch." },
-                { IDC_OPT_SNAPSHOT_DIR,
-                  L"Save the snapshots from statistics to this location,\n"
-                  L"instead of the same directory as the EXE file itself." },
-            };
-
-            // Store tooltip handle in dialog user data
-            HWND hTip = CreateTooltips(hDlg, tips, sizeof(tips)/sizeof(tips[0]));           
-            SetWindowLongPtr(hDlg, GWLP_USERDATA, (LONG_PTR)hTip);
-
-            // After creating the tooltip, if in dark mode
-            if (g_app.dark_mode) {
-                SetWindowTheme(hTip, L"DarkMode_Explorer", NULL);
-                SendMessage(hTip, TTM_SETTIPBKCOLOR, (WPARAM)g_app.dark_list_bg, 0);
-                SendMessage(hTip, TTM_SETTIPTEXTCOLOR, (WPARAM)g_app.dark_text, 0);
+            if (hCancel) {
+                RECT rc;
+                GetWindowRect(hCancel, &rc);
+                MapWindowPoints(NULL, hDlg, (LPPOINT)&rc, 2);
+                x -= wCancel;
+                SetWindowPos(hCancel, NULL, x, rc.top, wCancel, rc.bottom - rc.top, SWP_NOZORDER);
+                x -= spacing;
+            }
+            if (hOK) {
+                RECT rc;
+                GetWindowRect(hOK, &rc);
+                MapWindowPoints(NULL, hDlg, (LPPOINT)&rc, 2);
+                x -= wOK;
+                SetWindowPos(hOK, NULL, x, rc.top, wOK, rc.bottom - rc.top, SWP_NOZORDER);
             }
         }
+
+        CenterWindow(hDlg, GetParent(hDlg));
+        ClampWindowToWorkArea(hDlg);
 
         return TRUE;
     }
@@ -459,12 +562,10 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
             // Apply changes to running shaper if it's running
             if (g_app.shaper && shaper_is_running(g_app.shaper)) {
                 if (!ReloadShaperConfig()) {
-                    char err[512];
-                    snprintf(err, 512, "Failed to reload config: %s",
+                    wchar_t err[512];
+                    swprintf(err, 512, T(GUI_ERR_RELOAD_FAIL),
                             shaper_get_last_error(g_app.shaper));
-                    wchar_t werr[512];
-                    MultiByteToWideChar(CP_UTF8, 0, err, -1, werr, 512);
-                    MSGBOX(hDlg, werr, L"Error", MB_OK | MB_ICONERROR);
+                    MSGBOX(hDlg, err, T(S_ERROR), MB_OK | MB_ICONERROR);
                 }
             }
 
@@ -473,7 +574,22 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case IDCANCEL:
+            if (loc_get_language() != s_lang_on_entry) {
+                loc_set_language(s_lang_on_entry);
+                ApplyLanguageChange(NULL);
+            }
             EndDialog(hDlg, IDCANCEL);
+            return TRUE;
+
+        case IDC_OPT_LANGUAGE:
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                HWND hLang = GetDlgItem(hDlg, IDC_OPT_LANGUAGE);
+                int sel = (int)SendMessage(hLang, CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && sel < _LOC_LANG_COUNT) {
+                    loc_set_language((LangId)sel);
+                    ApplyLanguageChange(hDlg);
+                }
+            }
             return TRUE;
 
         case IDC_OPT_CONFIG_DIR_BROWSE:
@@ -490,8 +606,8 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
             BROWSEINFOW bi = {0};
             bi.hwndOwner = hDlg;
             bi.lpszTitle = is_config
-                           ? L"Select folder for the config file (BandwidthShaper.cfg):"
-                           : L"Select folder for CSV snapshot exports:";
+                           ? T(GUI_STATS_FOLDER_CONF)
+                           : T(GUI_STATS_FOLDER_PROMPT);
             bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
 
             // Convert the starting path to a PIDL for pre-selection
@@ -529,15 +645,20 @@ INT_PTR CALLBACK OptionsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPara
 // ---------------------------------------------------------------------------
 INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
     StatsDialogContext *ctx = (StatsDialogContext*)GetWindowLongPtr(hDlg, GWLP_USERDATA);
+    static LangId s_lang_on_entry = LOC_LANG_EN;
 
     switch (msg) {
     case WM_INITDIALOG:
+        // Apply translatable strings to static labels and buttons
+        s_lang_on_entry = loc_get_language();
+        RefreshStatsDlgStrings(hDlg);
+
         // Allocate and initialize context
         ctx = calloc(1, sizeof(StatsDialogContext));
         if (ctx) {
             ctx->initialized = FALSE; 
             SetWindowLongPtr(hDlg, GWLP_USERDATA, (LONG_PTR)ctx);
-        }
+        }   
 
         SetTimer(hDlg, 1, 500, NULL);
 
@@ -565,9 +686,9 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
             while (ListView_DeleteColumn(hProcList, 0)) {}
 
             struct { const wchar_t *text; int width; } pcols[] = {
-                {L"Process", S(220)},
-                {L"Data In",  S(110)},
-                {L"Data Out", S(110)},
+                {T(S_PROCESS), S(220)},
+                {T(GUI_STATS_DATA_IN),  S(110)},
+                {T(GUI_STATS_DATA_OUT), S(110)},
             };
             for (int i = 0; i < 3; i++) {
                 lvc.iSubItem = i;
@@ -583,9 +704,9 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
         }
 
         // Create "Save Statistics" button (positioned in WM_SIZE; initially disabled)
-        HWND hSave = CreateWindowW(L"BUTTON", L"Save Statistics",
+        HWND hSave = CreateWindowW(L"BUTTON", T(GUI_STATS_SAVE),
             WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED,
-            0, 0, 0, 0, hDlg, (HMENU)IDC_STATS_SAVE, g_hInst, NULL);
+            0, 0, 0, 0, hDlg, (HMENU)IDC_STATS_BTN_SAVE, g_hInst, NULL);
 
         // Use same font as dialog
         HFONT hDlgFont = (HFONT)SendMessage(hDlg, WM_GETFONT, 0, 0);
@@ -681,13 +802,13 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 		int currentY = margin;
 
 		// Download chart section
-		HWND hDlLabel = GetDlgItem(hDlg, IDC_STATIC_DL_LABEL);
+		HWND hDlLabel = GetDlgItem(hDlg, IDC_STATS_LBL_DL_HISTORY);
 		HWND hDlChart = GetDlgItem(hDlg, IDC_STATS_DL_CHART);
 
 		if (hDlLabel) {
 			SetWindowPos(hDlLabel, NULL,
 				margin, currentY,
-				100, labelHeight,
+				200, labelHeight,
 				SWP_NOZORDER);
 		}
 		currentY += labelHeight;
@@ -701,13 +822,13 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 		currentY += chartHeight + margin;
 
 		// Upload chart section
-		HWND hUlLabel = GetDlgItem(hDlg, IDC_STATIC_UL_LABEL);
+		HWND hUlLabel = GetDlgItem(hDlg, IDC_STATS_LBL_UL_HISTORY);
 		HWND hUlChart = GetDlgItem(hDlg, IDC_STATS_UL_CHART);
 
 		if (hUlLabel) {
 			SetWindowPos(hUlLabel, NULL,
 				margin, currentY,
-				100, labelHeight,
+				200, labelHeight,
 				SWP_NOZORDER);
 		}
 		currentY += labelHeight;
@@ -721,13 +842,13 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 		currentY += chartHeight + margin;
 
 		// Process list section (with header)
-		HWND hProcListLabel = GetDlgItem(hDlg, IDC_STATIC_PROC_LIST_LABEL);
+		HWND hProcListLabel = GetDlgItem(hDlg, IDC_STATS_LBL_PROC_TRAFFIC);
 		HWND hProcList = GetDlgItem(hDlg, IDC_STATS_PROC_LIST);
 
 		if (hProcListLabel) {
 			SetWindowPos(hProcListLabel, NULL,
 				margin, currentY,
-				120, listHeaderHeight,
+				200, listHeaderHeight,
 				SWP_NOZORDER);
 		}
 		currentY += listHeaderHeight;
@@ -746,7 +867,7 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 		}
 
 		// Statistics text section
-		HWND hStatsLabel = GetDlgItem(hDlg, IDC_STATIC_STATS_LABEL);
+		HWND hStatsLabel = GetDlgItem(hDlg, IDC_STATS_LBL_STATS);
 		HWND hStatsText = GetDlgItem(hDlg, IDC_STATS_TEXT);
 
 		if (hStatsLabel) {
@@ -767,34 +888,33 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 			currentY += statsHeight + margin;
 		}
 
-		// Buttons at the bottom
-		HWND hSave = GetDlgItem(hDlg, IDC_STATS_SAVE);
-		HWND hReset = GetDlgItem(hDlg, IDC_STATS_RESET);
+		// Buttons at the bottom – size to translated text
+		HWND hSave = GetDlgItem(hDlg, IDC_STATS_BTN_SAVE);
+		HWND hReset = GetDlgItem(hDlg, IDC_STATS_BTN_RESET);
 		HWND hClose = GetDlgItem(hDlg, IDCLOSE);
 
-		int btn_width = S(110);
 		int btn_spacing = S(10);
 		int btn_y = h - buttonHeight - bottomMargin;
+		int pad = S(10);
+		int minW = S(110);
 
+		int wSave = hSave ? MeasureButtonTextWidth(hSave, pad) : minW;
+		if (wSave < minW) wSave = minW;
+		int wReset = hReset ? MeasureButtonTextWidth(hReset, pad) : minW;
+		if (wReset < minW) wReset = minW;
+		int wClose = hClose ? MeasureButtonTextWidth(hClose, pad) : minW;
+		if (wClose < minW) wClose = minW;
+
+		int x = margin;
 		if (hSave) {
-			SetWindowPos(hSave, NULL,
-				margin, btn_y,
-				btn_width, buttonHeight,
-				SWP_NOZORDER);
+			SetWindowPos(hSave, NULL, x, btn_y, wSave, buttonHeight, SWP_NOZORDER);
+			x += wSave + btn_spacing;
 		}
-
 		if (hReset) {
-			SetWindowPos(hReset, NULL,
-				margin + btn_width + btn_spacing, btn_y,
-				btn_width, buttonHeight,
-				SWP_NOZORDER);
+			SetWindowPos(hReset, NULL, x, btn_y, wReset, buttonHeight, SWP_NOZORDER);
 		}
-
 		if (hClose) {
-			SetWindowPos(hClose, NULL,
-				w - btn_width - margin, btn_y,
-				btn_width, buttonHeight,
-				SWP_NOZORDER);
+			SetWindowPos(hClose, NULL, w - wClose - margin, btn_y, wClose, buttonHeight, SWP_NOZORDER);
 		}
 
 		return 0;
@@ -958,7 +1078,8 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 
             if (quota_exhausted) {
                 // Build list of processes with exhausted quotas
-                wchar_t exhausted_list[512] = L"\r\n*** QUOTA EXHAUSTED PROCESSES ***\r\n";
+                wchar_t exhausted_list[512];
+                wcscpy(exhausted_list, T(GUI_STATS_QUOTA_HEADER));
                 for (int i = 0; i < g_app.process_count; i++) {
                     ProcessEntry* proc = &g_app.processes[i];
                     if ((proc->quota_in > 0 && proc->quota_in_used >= proc->quota_in) ||
@@ -966,9 +1087,9 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
                         wchar_t line[128];
                         swprintf(line, 128, L"  %s", proc->name);
                         if (proc->quota_in > 0 && proc->quota_in_used >= proc->quota_in)
-                            wcscat(line, L" (IN)");
+                            wcscat(line, T(GUI_STATS_QUOTA_IN_SUFFIX));
                         if (proc->quota_out > 0 && proc->quota_out_used >= proc->quota_out)
-                            wcscat(line, L" (OUT)");
+                            wcscat(line, T(GUI_STATS_QUOTA_OUT_SUFFIX));
                         wcscat(line, L"\r\n");
                         wcsncat(exhausted_list, line, 511 - wcslen(exhausted_list));
                     }
@@ -978,18 +1099,7 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 
             wchar_t buf[2048];
             swprintf(buf, 2048,
-                L"Packets processed:  %I64u\r\n"
-                L"Dropped (rate):     %I64u\r\n"
-                L"Dropped (loss):     %I64u\r\n"
-                L"Delayed:            %I64u\r\n"
-                L"Invalid:            %I64u\r\n"
-                L"\r\n"
-                L"Total Bytes:        %I64u (%.2f MB)\r\n"
-                L"Download Bytes:     %I64u (%.2f MB)\r\n"
-                L"Upload Bytes:       %I64u (%.2f MB)\r\n"
-                L"\r\n"
-                L"Current Rate:       %.2f / %.2f KB/s\r\n"
-                L"%s%s%s",
+                T(GUI_STATS_TEXT2),
                 (unsigned long long)stats.packets_processed,
                 (unsigned long long)stats.packets_dropped_rate_limit,
                 (unsigned long long)stats.packets_dropped_loss,
@@ -1003,7 +1113,7 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
                 total_ul_bytes / (1024.0 * 1024.0),
                 g_app.dl_history[(g_app.history_head ? g_app.history_head-1 : SPARKLINE_SAMPLES-1)] / 1024.0,
                 g_app.ul_history[(g_app.history_head ? g_app.history_head-1 : SPARKLINE_SAMPLES-1)] / 1024.0,
-                stats.cap_reached ? L"\r\n*** DATA CAP REACHED ***" : L"",
+                stats.cap_reached ? T(GUI_STATS_DATA_CAP_HIT) : L"",
                 (stats.cap_reached && quota_exhausted) ? L"\r\n" : L"",
                 quota_exhausted ? quota_msg : L"");
 
@@ -1031,7 +1141,7 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 
         // Enable Save button only when shaper is stopped (data is final)
         {
-            HWND hSave = GetDlgItem(hDlg, IDC_STATS_SAVE);
+            HWND hSave = GetDlgItem(hDlg, IDC_STATS_BTN_SAVE);
             if (hSave) {
                 bool can_save = (!g_app.shaper || !shaper_is_running(g_app.shaper))
                                 && g_app.proc_stats_count > 0;
@@ -1206,11 +1316,11 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
-        case IDC_STATS_SAVE:
+        case IDC_STATS_BTN_SAVE:
             SaveStatisticsToCSV(hDlg);
             return true;
 
-        case IDC_STATS_RESET:
+        case IDC_STATS_BTN_RESET:
             memset(g_app.dl_history, 0, sizeof(g_app.dl_history));
             memset(g_app.ul_history, 0, sizeof(g_app.ul_history));
             g_app.history_head = 0;
@@ -1262,8 +1372,14 @@ INT_PTR CALLBACK StatsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 // "Specify process" input dialog proc
 // ---------------------------------------------------------------------------
 INT_PTR CALLBACK SpecifyProcDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam) {
+    static LangId s_lang_on_entry = LOC_LANG_EN;
+    (void)lParam;
     switch (msg) {
     case WM_INITDIALOG:
+        // Apply translatable strings
+        s_lang_on_entry = loc_get_language();
+        RefreshSpecifyProcDlgStrings(hDlg);
+
         SetWindowLongPtr(hDlg, GWLP_USERDATA, lParam);  // caller's wchar_t buffer
         SetFocus(GetDlgItem(hDlg, IDC_SPECIFY_NAME));
         CenterWindow(hDlg, GetParent(hDlg));
@@ -1358,7 +1474,7 @@ INT_PTR CALLBACK SpecifyProcDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM l
             p = buf + wcslen(buf) - 1;
             while (p >= buf && (*p == L' ' || *p == L'\t')) *p-- = L'\0';
             if (buf[0] == L'\0') {
-                MSGBOX(hDlg, L"Please enter a process name.", L"Specify Process",
+                MSGBOX(hDlg, T(GUI_DLG_SPECIFY_PROCESS), T(GUI_DLG_SPECIFY_TITLE),
                             MB_OK | MB_ICONWARNING);
                 return TRUE;
             }
@@ -1396,7 +1512,7 @@ static void SchedDlg_UpdateDesc(HWND hDlg, const Schedule *s) {
     HWND hDesc = GetDlgItem(hDlg, SDLG_DESC_LABEL);
     if (!hDesc) return;
     if (schedule_is_empty(s)) {
-        SetWindowTextW(hDesc, L"(no schedule - rules always active)");
+        SetWindowTextW(hDesc, T(GUI_CELL_NO_SCHEDULE));
     } else {
         wchar_t buf[128];
         schedule_describe(s, buf, 128);
@@ -1434,7 +1550,7 @@ INT_PTR CALLBACK ScheduleDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPar
         // Title: process name
         ProcessEntry *proc = &g_app.processes[ctx->proc_idx];
         wchar_t title[MAX_PATH + 20];
-        swprintf(title, MAX_PATH + 20, L"Schedule - %s", proc->name);
+        swprintf(title, MAX_PATH + 20, T(GUI_SCHED_TITLE_FMT), proc->name);
         SetWindowTextW(hDlg, title);
 
         // Resize the dialog to the correct pixel size
@@ -1485,7 +1601,7 @@ INT_PTR CALLBACK ScheduleDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPar
         // Row 1 – Time  (y=12..28)
         // ----------------------------------------------------------
         // Time
-        CTRL(L"BUTTON", L"Time",
+        CTRL(L"BUTTON", T(GUI_SCHED_TIME),
              0, BS_AUTOCHECKBOX,
              10, 12, 52, 16, SDLG_CHK_TIME);
 
@@ -1509,7 +1625,7 @@ INT_PTR CALLBACK ScheduleDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPar
         CTRL(L"EDIT",   L"00", WS_EX_CLIENTEDGE,
              ES_CENTER | ES_NUMBER | WS_TABSTOP,
              188, 11, 28, 18, SDLG_EDIT_EM);
-        CTRL(L"STATIC", L"(24h)", 0, SS_LEFTNOWORDWRAP | SS_CENTERIMAGE,
+        CTRL(L"STATIC", T(GUI_SCHED_TIME_H), 0, SS_LEFTNOWORDWRAP | SS_CENTERIMAGE,
              220, 11, 36, 18, SDLG_LBL_24H);
 
         // Limit each hour/minute box to 2 characters
@@ -1521,13 +1637,13 @@ INT_PTR CALLBACK ScheduleDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPar
         // ----------------------------------------------------------
         // Row 2 – Day of week  (y=38..54)
         // ----------------------------------------------------------
-        CTRL(L"BUTTON", L"Day of week",
+        CTRL(L"BUTTON", T(GUI_SCHED_DOW),
              0, BS_AUTOCHECKBOX,
              10, 38, 96, 16, SDLG_CHK_DAYS);
 
         // Seven push-like checkboxes: Mo Tu We Th Fr Sa Su
-        static const wchar_t *DAY_LABELS[7] =
-            { L"Mo", L"Tu", L"We", L"Th", L"Fr", L"Sa", L"Su" };
+        const wchar_t *DAY_LABELS[7] =
+            { T(GUI_SCHED_DAY_MON), T(GUI_SCHED_DAY_TUE), T(GUI_SCHED_DAY_WED), T(GUI_SCHED_DAY_THU), T(GUI_SCHED_DAY_FRI), T(GUI_SCHED_DAY_SAT), T(GUI_SCHED_DAY_SUN) };
         for (int d = 0; d < 7; d++) {
             CTRL(L"BUTTON", DAY_LABELS[d],
                  0, BS_AUTOCHECKBOX | BS_PUSHLIKE | WS_TABSTOP,
@@ -1540,31 +1656,31 @@ INT_PTR CALLBACK ScheduleDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPar
         // ----------------------------------------------------------
         CTRL(L"STATIC", L"",
              WS_EX_STATICEDGE, SS_LEFTNOWORDWRAP | SS_CENTERIMAGE,
-             10, 64, 318, 18, SDLG_DESC_LABEL);
+             10, 64, 318, 26, SDLG_DESC_LABEL);
 
         // ----------------------------------------------------------
-        // Horizontal separator  (y=92)
+        // Horizontal separator  (y=98)
         // ----------------------------------------------------------
         CTRL(L"STATIC", L"",
              0, SS_ETCHEDHORZ,
-             10, 92, 318, 2, -1);
+             10, 98, 318, 2, -1);
 
         // ----------------------------------------------------------
-        // Note text  (y=100..120)
+        // Note text  (y=106..120)
         // ----------------------------------------------------------
         CTRL(L"STATIC",
-             L"When outside the schedule, all rules for this process are suspended.",
+             T(GUI_SCHED_NOTE),
              0, SS_LEFT,
-             10, 100, 318, 36, -1);
+             10, 106, 318, 36, -1);
 
         // ----------------------------------------------------------
         // Buttons  (y=148..152)
         // ----------------------------------------------------------
-        CTRL(L"BUTTON", L"Reset",  0, BS_PUSHBUTTON | WS_TABSTOP,
+        CTRL(L"BUTTON", T(GUI_RESET), 0, BS_PUSHBUTTON | WS_TABSTOP,
              10, 148, 60, 20, SDLG_BTN_RESET);
-        CTRL(L"BUTTON", L"OK",     0, BS_DEFPUSHBUTTON | WS_TABSTOP,
+        CTRL(L"BUTTON", T(GUI_OK), 0, BS_DEFPUSHBUTTON | WS_TABSTOP,
              204, 148, 60, 20, SDLG_BTN_OK);
-        CTRL(L"BUTTON", L"Cancel", 0, BS_PUSHBUTTON | WS_TABSTOP,
+        CTRL(L"BUTTON", T(GUI_CANCEL), 0, BS_PUSHBUTTON | WS_TABSTOP,
              268, 148, 60, 20, SDLG_BTN_CANCEL);
 
 #undef CTRL
@@ -1598,6 +1714,50 @@ INT_PTR CALLBACK ScheduleDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPar
         // Apply dark mode to all freshly-created child controls
         if (g_app.dark_mode)
             ApplyDarkModeToAllControls(hDlg, true);
+
+        // Resize buttons to fit translated text and right-align OK/Cancel
+        {
+            HWND hReset = GetDlgItem(hDlg, SDLG_BTN_RESET);
+            HWND hOK = GetDlgItem(hDlg, SDLG_BTN_OK);
+            HWND hCancel = GetDlgItem(hDlg, SDLG_BTN_CANCEL);
+            int pad = S(8);
+            int minW = S(50);
+
+            int wReset = hReset ? MeasureButtonTextWidth(hReset, pad) : minW;
+            if (wReset < minW) wReset = minW;
+            int wOK = hOK ? MeasureButtonTextWidth(hOK, pad) : minW;
+            if (wOK < minW) wOK = minW;
+            int wCancel = hCancel ? MeasureButtonTextWidth(hCancel, pad) : minW;
+            if (wCancel < minW) wCancel = minW;
+
+            RECT rcClient;
+            GetClientRect(hDlg, &rcClient);
+            int spacing = S(8);
+            int x = rcClient.right - S(10);  // right margin
+
+            if (hCancel) {
+                RECT rc;
+                GetWindowRect(hCancel, &rc);
+                MapWindowPoints(NULL, hDlg, (LPPOINT)&rc, 2);
+                x -= wCancel;
+                SetWindowPos(hCancel, NULL, x, rc.top, wCancel, rc.bottom - rc.top, SWP_NOZORDER);
+                x -= spacing;
+            }
+            if (hOK) {
+                RECT rc;
+                GetWindowRect(hOK, &rc);
+                MapWindowPoints(NULL, hDlg, (LPPOINT)&rc, 2);
+                x -= wOK;
+                SetWindowPos(hOK, NULL, x, rc.top, wOK, rc.bottom - rc.top, SWP_NOZORDER);
+                x -= spacing;
+            }
+            if (hReset) {
+                RECT rc;
+                GetWindowRect(hReset, &rc);
+                MapWindowPoints(NULL, hDlg, (LPPOINT)&rc, 2);
+                SetWindowPos(hReset, NULL, S(10), rc.top, wReset, rc.bottom - rc.top, SWP_NOZORDER);
+            }
+        }
 
         ctx->initializing = false;  // controls fully set up; EN_CHANGE is now live
         return TRUE;
@@ -1699,16 +1859,14 @@ INT_PTR CALLBACK ScheduleDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lPar
             if (ctx->current.has_time &&
                 ctx->current.start_min == ctx->current.end_min) {
                 MSGBOX(hDlg,
-                    L"Start and end times are identical.\n"
-                    L"Please enter a valid time range, or uncheck the Time option.",
-                    L"Invalid Schedule", MB_OK | MB_ICONWARNING);
+                    T(GUI_SCHED_ERR_SAME_TIME),
+                    T(GUI_SCHED_CAP_INVALID), MB_OK | MB_ICONWARNING);
                 break;
             }
             if (ctx->current.has_days && ctx->current.days_mask == 0) {
                 MSGBOX(hDlg,
-                    L"No days of the week are selected.\n"
-                    L"Please select at least one day, or uncheck the Day of week option.",
-                    L"Invalid Schedule", MB_OK | MB_ICONWARNING);
+                    T(GUI_SCHED_ERR_NO_DAY),
+                    T(GUI_SCHED_CAP_INVALID), MB_OK | MB_ICONWARNING);
                 break;
             }
 
@@ -1901,15 +2059,14 @@ bool SaveStatisticsToCSV(HWND hParent) {
     FILE *f = NULL;
     if (_wfopen_s(&f, filename, L"w,ccs=UTF-8") != 0 || !f) {
         MSGBOX(hParent,
-            L"Failed to create the CSV file.\n"
-            L"Make sure the application has write access to its directory.",
-            L"Save Statistics", MB_OK | MB_ICONERROR);
+            T(GUI_STATS_SAVE_ERROR),
+            T(GUI_STATS_SAVE), MB_OK | MB_ICONERROR);
         return false;
     }
 
     // Timestamp header
-    fwprintf(f, L"BandwidthShaper Statistics Export\n");
-    fwprintf(f, L"Generated,%04u-%02u-%02u %02u:%02u:%02u\n\n",
+    fwprintf(f, T(GUI_STATS_SAVE_HEADER));
+    fwprintf(f, T(GUI_STATS_SAVE_GENER),
              st.wYear, st.wMonth, st.wDay,
              st.wHour, st.wMinute, st.wSecond);
 
@@ -1934,8 +2091,8 @@ bool SaveStatisticsToCSV(HWND hParent) {
                 SE tmp = sorted[a]; sorted[a] = sorted[b]; sorted[b] = tmp;
             }
 
-    fwprintf(f, L"Per-Process Traffic\n");
-    fwprintf(f, L"Process,Description,Data In (MB),Data Out (MB),Total (MB),Quota In (MB),Quota Out (MB),Quota Exhausted\n");
+    fwprintf(f, T(GUI_STATS_SAVE_PER_TRAF));
+    fwprintf(f, T(GUI_STATS_SAVE_P_DESC));
     for (int r = 0; r < scount; r++) {
         int si = sorted[r].idx;
         double dl_mb = g_app.proc_stats[si].dl_bytes / (1024.0 * 1024.0);
@@ -1963,29 +2120,28 @@ bool SaveStatisticsToCSV(HWND hParent) {
                  g_app.proc_stats[si].description,
                  dl_mb, ul_mb, tot,
                  quota_in_mb, quota_out_mb,
-                 quota_exhausted ? L"YES" : L"NO");
+                 quota_exhausted ? T(GUI_C_YES) : T(GUI_C_NO));
     }
 
     LeaveCriticalSection(&g_app.process_lock);
 
     if (scount == 0) {
-        fwprintf(f, L"(no traffic recorded)\n");
+        fwprintf(f, T(GUI_STATS_SAVE_NO_TRAF));
     }
 
     fwprintf(f, L"\n");
 
     // Summary / packet counters
-    fwprintf(f, L"Session Summary\n");
+    fwprintf(f, T(GUI_STATS_SAVE_SES_SUM));
     if (g_app.has_last_stats) {
         // Use the frozen last_stats snapshot
-        fwprintf(f, L"Packets processed,%llu\n",     g_app.last_stats.packets_processed);
-        fwprintf(f, L"Dropped (rate limit),%llu\n",  g_app.last_stats.packets_dropped_rate_limit);
-        fwprintf(f, L"Dropped (loss sim),%llu\n",    g_app.last_stats.packets_dropped_loss);
-        fwprintf(f, L"Delayed,%llu\n",               g_app.last_stats.packets_delayed);
-        fwprintf(f, L"Invalid packets,%llu\n",       g_app.last_stats.invalid_packets);
-        fwprintf(f, L"Total bytes processed,%llu\n", g_app.last_stats.bytes_processed);
-        fwprintf(f, L"Total bytes processed (MB),%.3f\n",
-                 g_app.last_stats.bytes_processed / (1024.0 * 1024.0));
+        fwprintf(f, T(GUI_STATS_SAVE_PACKETS), g_app.last_stats.packets_processed);
+        fwprintf(f, T(GUI_STATS_SAVE_DROPPED_R), g_app.last_stats.packets_dropped_rate_limit);
+        fwprintf(f, T(GUI_STATS_SAVE_DROPPED_L), g_app.last_stats.packets_dropped_loss);
+        fwprintf(f, T(GUI_STATS_SAVE_DELAYED), g_app.last_stats.packets_delayed);
+        fwprintf(f, T(GUI_STATS_SAVE_INVALID), g_app.last_stats.invalid_packets);
+        fwprintf(f, T(GUI_STATS_SAVE_TOTAL_B), g_app.last_stats.bytes_processed);
+        fwprintf(f, T(GUI_STATS_SAVE_TOTAL_P), g_app.last_stats.bytes_processed / (1024.0 * 1024.0));
 
         // Compute overall DL/UL from the proc_stats table (most accurate)
         uint64_t sum_dl = 0, sum_ul = 0;
@@ -1993,11 +2149,11 @@ bool SaveStatisticsToCSV(HWND hParent) {
             sum_dl += g_app.proc_stats[i].dl_bytes;
             sum_ul += g_app.proc_stats[i].ul_bytes;
         }
-        fwprintf(f, L"Download bytes (MB),%.3f\n", sum_dl / (1024.0 * 1024.0));
-        fwprintf(f, L"Upload bytes (MB),%.3f\n",   sum_ul / (1024.0 * 1024.0));
+        fwprintf(f, T(GUI_STATS_SAVE_DL_BYTES), sum_dl / (1024.0 * 1024.0));
+        fwprintf(f, T(GUI_STATS_SAVE_UL_BYTES), sum_ul / (1024.0 * 1024.0));
 
         if (g_app.last_stats.cap_reached)
-            fwprintf(f, L"Data cap reached,YES\n");
+            fwprintf(f, T(GUI_STATS_SAVE_DATA_CAP));
 
         // Add quota exhaustion summary
         bool any_quota_exhausted = false;
@@ -2006,33 +2162,33 @@ bool SaveStatisticsToCSV(HWND hParent) {
             if ((proc->quota_in > 0 && proc->quota_in_used >= proc->quota_in) ||
                 (proc->quota_out > 0 && proc->quota_out_used >= proc->quota_out)) {
                 if (!any_quota_exhausted) {
-                    fwprintf(f, L"\nQuota Exhausted Processes\n");
-                    fwprintf(f, L"Process,Quota Type,Quota (MB),Used (MB)\n");
+                    fwprintf(f, T(GUI_STATS_SAVE_QUOTA_E));
+                    fwprintf(f, T(GUI_STATS_SAVE_QUOTA_C));
                     any_quota_exhausted = true;
                 }
 
                 if (proc->quota_in > 0 && proc->quota_in_used >= proc->quota_in) {
                     double quota_mb = proc->quota_in / (1024.0 * 1024.0);
                     double used_mb = proc->quota_in_used / (1024.0 * 1024.0);
-                    fwprintf(f, L"\"%s\",IN,%.3f,%.3f\n", proc->name, quota_mb, used_mb);
+                    fwprintf(f, T(GUI_STATS_SAVE_QUOTA_IN), proc->name, quota_mb, used_mb);
                 }
 
                 if (proc->quota_out > 0 && proc->quota_out_used >= proc->quota_out) {
                     double quota_mb = proc->quota_out / (1024.0 * 1024.0);
                     double used_mb = proc->quota_out_used / (1024.0 * 1024.0);
-                    fwprintf(f, L"\"%s\",OUT,%.3f,%.3f\n", proc->name, quota_mb, used_mb);
+                    fwprintf(f, T(GUI_STATS_SAVE_QUOTA_OUT), proc->name, quota_mb, used_mb);
                 }
             }
         }
     } else {
-        fwprintf(f, L"(shaper not yet stopped - no final summary available)\n");
+        fwprintf(f, T(GUI_STATS_SAVE_NO_STOP));
     }
 
     fclose(f);
 
     // Notify user with the full path
     wchar_t msg[MAX_PATH + 64];
-    swprintf(msg, MAX_PATH + 64, L"Statistics saved to:\n%s", filename);
-    MSGBOX(hParent, msg, L"Save Statistics", MB_OK | MB_ICONINFORMATION);
+    swprintf(msg, MAX_PATH + 64, T(GUI_STATS_SAVED_FMT), filename);
+    MSGBOX(hParent, msg, T(GUI_STATS_SAVE), MB_OK | MB_ICONINFORMATION);
     return true;
 }

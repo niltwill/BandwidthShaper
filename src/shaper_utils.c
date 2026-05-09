@@ -4,6 +4,7 @@
 
 #include "common.h"
 #include "shaper_utils.h"
+#include "localization_api.h"
 
 // -----------------------------------------------------------------------
 // Rate parsing / printing
@@ -14,41 +15,41 @@ double parse_rate_with_units(const char *rate_str) {
     double value = 0;
 
     if (sscanf(rate_str, "%lf%2s", &value, unit) < 1) {
-        fprintf(stderr, "Failed to parse rate '%s'. Defaulting to 0.\n", rate_str);
+        fprintf(stderr, C(CLI_ERR_RATE_PARSE), rate_str);
         return 0;
     }
 
     if (value < 0 || !isfinite(value)) {
-        fprintf(stderr, "Error: Rate value must be non-negative and finite. Got: %f\n", value);
+        fprintf(stderr, C(CLI_ERR_RATE_NEGATIVE2), value);
         return 0;
     }
 
     const double MAX_RATE = 1e15;
     double multiplier = 1.0;
-    const char *unit_name = "bytes";
+    const char *unit_name = C(S_UNIT_BYTES);
 
-    if      (strcmp(unit, "b")  == 0) { multiplier = 1.0;                unit_name = "bytes"; }
+    if      (strcmp(unit, "b")  == 0) { multiplier = 1.0;                unit_name = C(S_UNIT_BYTES); }
     else if (strcmp(unit, "KB") == 0) { multiplier = 1000.0;             unit_name = "KB"; }
     else if (strcmp(unit, "MB") == 0) { multiplier = 1000000.0;          unit_name = "MB"; }
     else if (strcmp(unit, "GB") == 0) { multiplier = 1000000000.0;       unit_name = "GB"; }
     else if (strcmp(unit, "Kb") == 0) { multiplier = 1000.0 / 8.0;       unit_name = "Kb"; }
     else if (strcmp(unit, "Mb") == 0) { multiplier = 1000000.0 / 8.0;    unit_name = "Mb"; }
     else if (strcmp(unit, "Gb") == 0) { multiplier = 1000000000.0 / 8.0; unit_name = "Gb"; }
-    else if (unit[0] == '\0')         { multiplier = 1000.0;             unit_name = "KB (default)"; }
+    else if (unit[0] == '\0')         { multiplier = 1000.0;             unit_name = C(CLI_UNIT_KB_D); }
     else {
-        fprintf(stderr, "Invalid unit '%s' in rate '%s'. Defaulting to kilobytes.\n", unit, rate_str);
+        fprintf(stderr, C(CLI_ERR_RATE_UNIT), unit, rate_str);
         multiplier = 1000.0;
-        unit_name  = "KB (default)";
+        unit_name  = C(CLI_UNIT_KB_D);
     }
 
     if (value > MAX_RATE / multiplier) {
-        fprintf(stderr, "Error: Rate value too large (%f %s).\n", value, unit_name);
+        fprintf(stderr, C(CLI_ERR_RATE_TOO_LARGE), value, unit_name);
         return MAX_RATE;
     }
 
     double result = value * multiplier;
     if (!isfinite(result) || result < 0) {
-        fprintf(stderr, "Error: Rate calculation overflow.\n");
+        fprintf(stderr, C(CLI_ERR_RATE_OVERFLOW));
         return MAX_RATE;
     }
     return result;
@@ -65,6 +66,20 @@ void print_rate_with_units(const char *label, double rate_bps) {
 // NIC helpers
 // -----------------------------------------------------------------------
 
+// Convert status enum to localized string
+static const char *nic_get_status_str(IF_OPER_STATUS status) {
+    switch (status) {
+        case IfOperStatusUp:             return C(CLI_NIC_OPERSTATUS1);
+        case IfOperStatusDown:           return C(CLI_NIC_OPERSTATUS2);
+        case IfOperStatusTesting:        return C(CLI_NIC_OPERSTATUS3);
+        case IfOperStatusUnknown:        return C(CLI_NIC_OPERSTATUS4);
+        case IfOperStatusDormant:        return C(CLI_NIC_OPERSTATUS5);
+        case IfOperStatusNotPresent:     return C(CLI_NIC_OPERSTATUS6);
+        case IfOperStatusLowerLayerDown: return C(CLI_NIC_OPERSTATUS7);
+        default:                         return C(CLI_NIC_OPERSTATUS4);
+    }
+}
+
 void list_network_interfaces(void) {
     PIP_ADAPTER_ADDRESSES addrs = NULL;
     ULONG buf_len = 0;
@@ -72,42 +87,29 @@ void list_network_interfaces(void) {
 
     ret = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, NULL, &buf_len);
     if (ret != ERROR_BUFFER_OVERFLOW) {
-        fprintf(stderr, "GetAdaptersAddresses failed: %lu\n", ret);
+        fprintf(stderr, C(CLI_ERR_NIC_GET_ADDRS), ret);
         return;
     }
 
     addrs = malloc(buf_len);
-    if (!addrs) { fprintf(stderr, "Memory allocation failed\n"); return; }
+    if (!addrs) { fprintf(stderr, C(CLI_ERR_ALLOC)); return; }
 
     ret = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, addrs, &buf_len);
     if (ret != NO_ERROR) {
-        fprintf(stderr, "GetAdaptersAddresses failed: %lu\n", ret);
+        fprintf(stderr, C(CLI_ERR_NIC_GET_ADDRS), ret);
         free(addrs);
         return;
     }
 
-    printf("Available Network Interfaces:\n============================\n");
-
-    static const struct { IF_OPER_STATUS code; const char *label; } status_map[] = {
-        {IfOperStatusUp,             "Up (Operational)"},
-        {IfOperStatusDown,           "Down"},
-        {IfOperStatusTesting,        "Testing"},
-        {IfOperStatusUnknown,        "Unknown"},
-        {IfOperStatusDormant,        "Dormant"},
-        {IfOperStatusNotPresent,     "Not Present"},
-        {IfOperStatusLowerLayerDown, "Lower Layer Down"},
-    };
+    printf(C(CLI_NIC_LIST_HEADER));
 
     for (PIP_ADAPTER_ADDRESSES a = addrs; a; a = a->Next) {
-        const char *status_str = "Unknown";
-        for (int i = 0; i < (int)(sizeof(status_map)/sizeof(status_map[0])); i++) {
-            if (a->OperStatus == status_map[i].code) { status_str = status_map[i].label; break; }
-        }
-        printf("Interface Index: %u\n", a->IfIndex);
-        printf("Interface Name: %s\n", a->AdapterName);
-        printf("Description: %ws\n", a->Description);
-        printf("Status: %s\n", status_str);
-        if (a->OperStatus == IfOperStatusUp) printf(">> Available for throttling <<\n");
+        const char *status_str = nic_get_status_str(a->OperStatus);
+        printf(C(CLI_NIC_INDEX), a->IfIndex);
+        printf(C(CLI_NIC_NAME), a->AdapterName);
+        printf(C(CLI_NIC_DESC), a->Description);
+        printf(C(CLI_NIC_STATUS), status_str);
+        if (a->OperStatus == IfOperStatusUp) printf(C(CLI_NIC_AVAILABLE));
         printf("\n");
     }
     free(addrs);
@@ -120,16 +122,16 @@ bool get_valid_nic_indices(unsigned int **valid_indices, unsigned int *count) {
 
     ret = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, NULL, &buf_len);
     if (ret != ERROR_BUFFER_OVERFLOW) {
-        fprintf(stderr, "GetAdaptersAddresses failed: %lu\n", ret);
+        fprintf(stderr, C(CLI_ERR_NIC_GET_ADDRS), ret);
         return false;
     }
 
     addrs = malloc(buf_len);
-    if (!addrs) { fprintf(stderr, "Memory allocation failed\n"); return false; }
+    if (!addrs) { fprintf(stderr, C(CLI_ERR_ALLOC)); return false; }
 
     ret = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_INCLUDE_PREFIX, NULL, addrs, &buf_len);
     if (ret != NO_ERROR) {
-        fprintf(stderr, "GetAdaptersAddresses failed: %lu\n", ret);
+        fprintf(stderr, C(CLI_ERR_NIC_GET_ADDRS), ret);
         free(addrs);
         return false;
     }
@@ -139,13 +141,13 @@ bool get_valid_nic_indices(unsigned int **valid_indices, unsigned int *count) {
         if (a->OperStatus == IfOperStatusUp) (*count)++;
 
     if (*count == 0) {
-        fprintf(stderr, "No operational network interfaces found\n");
+        fprintf(stderr, C(CLI_ERR_NIC_NO_OP));
         free(addrs); return false;
     }
 
     *valid_indices = malloc(*count * sizeof(unsigned int));
     if (!*valid_indices) {
-        fprintf(stderr, "Memory allocation failed\n");
+        fprintf(stderr, C(CLI_ERR_ALLOC));
         free(addrs); return false;
     }
 
@@ -170,13 +172,13 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
 
     if (!get_valid_nic_indices(&valid_indices, &valid_count)) {
 #if CLI_APP_BUILD
-        fprintf(stderr, "Failed to get valid network interface indices\n"); exit(EXIT_FAILURE);
+        fprintf(stderr, C(CLI_ERR_NIC_INDICES)); exit(EXIT_FAILURE);
 #else
         return NULL;
 #endif
     }
 
-    printf("Valid network interface indices: ");
+    printf(C(CLI_NIC_VALID_INDICES));
     for (unsigned int i = 0; i < valid_count; i++) {
         if (i > 0) printf(", ");
         printf("%u", valid_indices[i]);
@@ -187,7 +189,7 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
     if (!copy) { 
         free(valid_indices);
 #if CLI_APP_BUILD
-        fprintf(stderr, "Memory allocation failed\n"); exit(EXIT_FAILURE);
+        fprintf(stderr, C(CLI_ERR_ALLOC)); exit(EXIT_FAILURE);
 #else
         return NULL;
 #endif
@@ -201,7 +203,7 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
         free(nic_indices); free(dl_limits); free(ul_limits);
         free(copy); free(valid_indices);
 #if CLI_APP_BUILD
-        fprintf(stderr, "Memory allocation failed\n"); exit(EXIT_FAILURE);
+        fprintf(stderr, C(CLI_ERR_ALLOC)); exit(EXIT_FAILURE);
 #else
         return NULL;
 #endif
@@ -224,7 +226,7 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
                 free(nic_indices); free(params->download_limits); free(params->upload_limits);
                 free(copy); free(valid_indices);
 #if CLI_APP_BUILD
-                fprintf(stderr, "Memory reallocation failed\n"); exit(EXIT_FAILURE);
+                fprintf(stderr, C(CLI_ERR_REALLOC)); exit(EXIT_FAILURE);
 #else
                 return NULL;
 #endif
@@ -240,7 +242,7 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
             free(params->download_limits); free(params->upload_limits);
             free(valid_indices);
 #if CLI_APP_BUILD
-            fprintf(stderr, "Memory allocation failed\n"); exit(EXIT_FAILURE);
+            fprintf(stderr, C(CLI_ERR_ALLOC)); exit(EXIT_FAILURE);
 #else
             return NULL;
 #endif
@@ -252,7 +254,7 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
         char *ul_part = strtok_s(NULL, ":", &inner_ctx);
 
         if (!nic_part) {
-            fprintf(stderr, "Invalid NIC format in token '%s'\n", token);
+            fprintf(stderr, C(CLI_ERR_NIC_FORMAT), token);
             free(entry);
             token = strtok(NULL, ",");
             continue;
@@ -261,8 +263,8 @@ unsigned int *parse_nic_indices(const char *input, ThrottlingParams *params) {
         unsigned int nic_index = (unsigned int)atoi(nic_part);
         if (!is_valid_nic_index(nic_index, valid_indices, valid_count)) {
 #if CLI_APP_BUILD
-            fprintf(stderr, "Error: NIC index %u is not valid or not operational.\n", nic_index);
-            fprintf(stderr, "Use --list-nics to see available interfaces.\n");
+            fprintf(stderr, C(CLI_ERR_NIC_INVALID), nic_index);
+            fprintf(stderr, C(CLI_ERR_NIC_USE_LIST));
 #endif
             free(entry); free(copy); free(nic_indices);
             free(params->download_limits); free(params->upload_limits);
@@ -303,7 +305,7 @@ bool parse_packet_headers(const char *packet, UINT packet_len, bool outbound,
     PWINDIVERT_UDPHDR udp_hdr = NULL;
 
     if (ip_buffer_size < INET6_ADDRSTRLEN) {
-        fprintf(stderr, "parse_packet_headers: IP buffer too small\n");
+        fprintf(stderr, C(CLI_ERR_IP_BUF_SMALL));
         return false;
     }
 
@@ -424,22 +426,22 @@ bool validate_packet(const char *packet, UINT packet_len, PacketStats *stats) {
 bool reinject_packet(HANDLE handle, char *packet, UINT packet_len,
                      WINDIVERT_ADDRESS *addr, PacketStats *stats) {
     if (!handle || handle == INVALID_HANDLE_VALUE) {
-        fprintf(stderr, "reinject_packet: invalid handle\n");
+        fprintf(stderr, C(CLI_ERR_REINJECT_HANDLE));
         return false;
     }
     if (!packet || packet_len == 0 || packet_len > MAX_PACKET_SIZE) {
-        fprintf(stderr, "reinject_packet: invalid packet (len=%u)\n", packet_len);
+        fprintf(stderr, C(CLI_ERR_REINJECT_PACKET), packet_len);
         if (stats) InterlockedIncrement(&stats->invalid_packets);
         return false;
     }
     if (!addr) {
-        fprintf(stderr, "reinject_packet: NULL address\n");
+        fprintf(stderr, C(CLI_ERR_REINJECT_ADDR));
         return false;
     }
 
     if (!WinDivertSend(handle, packet, packet_len, NULL, addr)) {
         DWORD err = GetLastError();
-        fprintf(stderr, "Failed to reinject packet: %lu\n", err);
+        fprintf(stderr, C(CLI_ERR_REINJECT_FAIL), err);
         if (stats && (err == ERROR_INVALID_PARAMETER || err == ERROR_INVALID_DATA))
             InterlockedIncrement(&stats->invalid_packets);
         return false;
@@ -526,7 +528,7 @@ void cleanup_rate_limits(ProcessParams *processparams, CRITICAL_SECTION *lock) {
     LeaveCriticalSection(lock);
 
     if (cleaned > 0)
-        printf("Cleaned up %d stale connection entries\n", cleaned);
+        printf(C(CLI_CONN_RATE_CLEANED), cleaned);
 }
 
 // -----------------------------------------------------------------------
@@ -625,7 +627,7 @@ void delay_buffer_process(DelayBuffer *buffer, CRITICAL_SECTION *lock,
 char **parse_processes(char *input, int *count) {
     int capacity = 16;
     char **processes = malloc(capacity * sizeof(char *));
-    if (!processes) { fprintf(stderr, "Memory allocation failed\n"); exit(EXIT_FAILURE); }
+    if (!processes) { fprintf(stderr, C(CLI_ERR_ALLOC)); exit(EXIT_FAILURE); }
     *count = 0;
 
     char *ctx = NULL;
@@ -637,7 +639,7 @@ char **parse_processes(char *input, int *count) {
             if (!np) {
                 for (int i = 0; i < *count; i++) free(processes[i]);
                 free(processes);
-                fprintf(stderr, "Memory allocation failed\n"); exit(EXIT_FAILURE);
+                fprintf(stderr, C(CLI_ERR_ALLOC)); exit(EXIT_FAILURE);
             }
             processes = np;
         }
@@ -649,7 +651,7 @@ char **parse_processes(char *input, int *count) {
         if (!processes[*count]) {
             for (int i = 0; i < *count; i++) free(processes[i]);
             free(processes);
-            fprintf(stderr, "Memory allocation failed\n"); exit(EXIT_FAILURE);
+            fprintf(stderr, C(CLI_ERR_ALLOC)); exit(EXIT_FAILURE);
         }
         (*count)++;
         token = strtok_s(NULL, ",", &ctx);
@@ -666,19 +668,19 @@ int parse_process_update_interval(const char *input, ProcessParams *processparam
     }
 
     char *copy = strdup(input);
-    if (!copy) { fprintf(stderr, "Memory allocation failed\n"); return 1; }
+    if (!copy) { fprintf(stderr, C(CLI_ERR_ALLOC)); return 1; }
 
     char *main_part = strtok(copy, ",");
     char *cooldown_part = strtok(NULL, ",");
 
     if (!main_part) {
-        fprintf(stderr, "Error: Invalid format for --process-update-interval.\n");
+        fprintf(stderr, C(CLI_ERR_PROC_INTERVAL_FMT));
         free(copy); return 1;
     }
 
     size_t main_len = strlen(main_part);
     if (main_len < 2 || main_len >= MAX_INTERVAL_STR_LEN) {
-        fprintf(stderr, "Error: Invalid --process-update-interval format.\n");
+        fprintf(stderr, C(CLI_ERR_PROC_INTERVAL_FMT2));
         free(copy); return 1;
     }
 
@@ -687,7 +689,7 @@ int parse_process_update_interval(const char *input, ProcessParams *processparam
     value_str[main_len - 1] = '\0';
 
     if (!isdigit((unsigned char)value_str[0])) {
-        fprintf(stderr, "Error: Invalid numeric value for --process-update-interval.\n");
+        fprintf(stderr, C(CLI_ERR_PROC_INTERVAL_NUM));
         free(copy); return 1;
     }
 
@@ -700,7 +702,7 @@ int parse_process_update_interval(const char *input, ProcessParams *processparam
         if (isdigit((unsigned char)*cooldown_part))
             cooldown_ms = (unsigned int)atoi(cooldown_part);
         else
-            fprintf(stderr, "Warning: Invalid cooldown value '%s', using 5000ms\n", cooldown_part);
+            fprintf(stderr, C(CLI_WARN_COOLDOWN_VAL), cooldown_part);
     }
 
     if (unit == 'p') {
@@ -712,7 +714,7 @@ int parse_process_update_interval(const char *input, ProcessParams *processparam
         processparams->packet_threshold = 0;
         processparams->min_update_interval_ms = cooldown_ms;
     } else {
-        fprintf(stderr, "Error: Unknown unit '%c'. Use 'p' or 't'.\n", unit);
+        fprintf(stderr, C(CLI_ERR_PROC_INTERVAL_UNIT), unit);
         free(copy); return 1;
     }
 
@@ -792,17 +794,16 @@ void print_statistics(bool enable_statistics, const PacketStats *stats) {
     LONGLONG bytes = InterlockedCompareExchange64((volatile LONGLONG *)&stats->bytes_processed, 0, 0);
     LONG invalid = InterlockedExchangeAdd((volatile LONG *)&stats->invalid_packets, 0);
 
-    printf("\n=== Bandwidth Shaper Statistics ===\n");
-    printf("Packets processed:              %ld\n", processed);
-    printf("Bytes processed:                %lld (%.2f MB)\n", bytes, bytes / 1048576.0);
-    printf("Packets dropped (rate limit):   %ld\n", dropped_rate);
-    printf("Packets dropped (loss sim):     %ld\n", dropped_loss);
-    printf("Packets delayed:                %ld\n", delayed);
-    printf("Invalid packets:                %ld\n", invalid);
+    printf(C(CLI_STATS_HEADER));
+    printf(C(CLI_STATS_PROCESSED), processed);
+    printf(C(CLI_STATS_BYTES), bytes, bytes / 1048576.0);
+    printf(C(CLI_STATS_DROPPED_RATE), dropped_rate);
+    printf(C(CLI_STATS_DROPPED_LOSS), dropped_loss);
+    printf(C(CLI_STATS_DELAYED), delayed);
+    printf(C(CLI_STATS_INVALID), invalid);
     if (processed > 0)
-        printf("Drop rate:                      %.2f%%\n",
-               ((double)(dropped_rate + dropped_loss) / processed) * 100.0);
-    printf("===================================\n\n");
+        printf(C(CLI_STATS_DROP_RATE), ((double)(dropped_rate + dropped_loss) / processed) * 100.0);
+    printf(C(CLI_STATS_FOOTER));
 }
 
 void update_statistics(bool enable_statistics, PacketStats *stats,
@@ -825,12 +826,12 @@ void update_statistics(bool enable_statistics, PacketStats *stats,
 
 void stop_windivert(void) {
     SC_HANDLE hSCM = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
-    if (!hSCM) { fprintf(stderr, "OpenSCManager failed (%lu)\n", GetLastError()); return; }
+    if (!hSCM) { fprintf(stderr, C(CLI_ERR_SCM_OPEN), GetLastError()); return; }
 
     SC_HANDLE hSvc = OpenService(hSCM, TEXT("WinDivert"),
                                  SERVICE_QUERY_STATUS | SERVICE_STOP);
     if (!hSvc) {
-        fprintf(stderr, "OpenService failed (%lu)\n", GetLastError());
+        fprintf(stderr, C(CLI_ERR_SVC_OPEN), GetLastError());
         CloseServiceHandle(hSCM);
         return;
     }
@@ -840,16 +841,16 @@ void stop_windivert(void) {
     if (QueryServiceStatusEx(hSvc, SC_STATUS_PROCESS_INFO,
                              (LPBYTE)&status, sizeof(status), &needed)) {
         if (status.dwCurrentState == SERVICE_RUNNING) {
-            printf("Stopping WinDivert service...\n");
+            printf(C(CLI_WINDIVERT_STOPPING));
             if (!ControlService(hSvc, SERVICE_CONTROL_STOP, (LPSERVICE_STATUS)&status))
-                fprintf(stderr, "Failed to stop WinDivert: %lu\n", GetLastError());
+                fprintf(stderr, C(CLI_ERR_SVC_STOP), GetLastError());
             else
-                printf("WinDivert service stopped.\n");
+                printf(C(CLI_WINDIVERT_STOPPED));
         } else {
-            printf("WinDivert service is not running.\n");
+            printf(C(CLI_WINDIVERT_NOT_RUNNING));
         }
     } else {
-        fprintf(stderr, "QueryServiceStatusEx failed (%lu)\n", GetLastError());
+        fprintf(stderr, C(CLI_ERR_SVC_QUERY), GetLastError());
     }
 
     CloseServiceHandle(hSvc);

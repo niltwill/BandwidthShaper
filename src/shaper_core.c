@@ -33,6 +33,7 @@
 #include "token_bucket.h"
 #include "pid_cache.h"
 #include "schedule.h"
+#include "localization_api.h"
 
 // -----------------------------------------------------------------------
 // Defines
@@ -444,12 +445,12 @@ bool shaper_add_process_rule(ShaperInstance *shaper,
                               Schedule *schedule) {
     if (!shaper || !identifier) return false;
     if (dl_rate < 0 || ul_rate < 0) {
-        set_error(shaper, "Invalid rate in shaper_add_process_rule");
+        set_error(shaper, C(CLI_ERR_SHAPER_PROCESS_RATE));
         return false;
     }
 
     ProcessRule *r = calloc(1, sizeof(ProcessRule));
-    if (!r) { set_error(shaper, "OOM in shaper_add_process_rule"); return false; }
+    if (!r) { set_error(shaper, C(CLI_ERR_SHAPER_OOM_PROC)); return false; }
 
     // Store rates and quotas
     r->dl_rate = dl_rate;
@@ -494,7 +495,7 @@ bool shaper_add_process_rule(ShaperInstance *shaper,
     if (is_pid) {
         int pid = atoi(identifier);
         if (pid <= 0) {
-            set_error(shaper, "Invalid PID in shaper_add_process_rule");
+            set_error(shaper, C(CLI_ERR_SHAPER_INV_PID));
             free(r); return false;
         }
         snprintf(r->name, sizeof(r->name), "__PID_%d__", pid);
@@ -502,17 +503,17 @@ bool shaper_add_process_rule(ShaperInstance *shaper,
         add_pid_to_reverse_index(shaper, (DWORD)pid, r);
         r->flags |= RULE_FLAG_IS_PID;
 
-        CORE_PRINTF(shaper, "PID rule: %d | DL %.2f MB/s UL %.2f MB/s | Quota: IN=%llu OUT=%llu | Schedule: %s\n",
+        CORE_PRINTF(shaper, C(CLI_ADD_PID_RULE),
                     pid, dl_rate / 1e6, ul_rate / 1e6, 
                     (unsigned long long)quota_in, (unsigned long long)quota_out,
-                    (r->flags & RULE_FLAG_HAS_SCHEDULE) ? "yes" : "no");
+                    (r->flags & RULE_FLAG_HAS_SCHEDULE) ? C(S_YES) : C(S_NO));
     } else {
         strncpy(r->name, identifier, sizeof(r->name) - 1);
         r->name[sizeof(r->name) - 1] = '\0';
-        CORE_PRINTF(shaper, "Rule: %s | DL %.2f MB/s UL %.2f MB/s | Quota: IN=%llu OUT=%llu | Schedule: %s\n",
+        CORE_PRINTF(shaper, C(CLI_ADD_RULE),
                     identifier, dl_rate / 1e6, ul_rate / 1e6,
                     (unsigned long long)quota_in, (unsigned long long)quota_out,
-                    (r->flags & RULE_FLAG_HAS_SCHEDULE) ? "yes" : "no");
+                    (r->flags & RULE_FLAG_HAS_SCHEDULE) ? C(S_YES) : C(S_NO));
     }
 
     r->burst = shaper->burst_size;
@@ -522,7 +523,7 @@ bool shaper_add_process_rule(ShaperInstance *shaper,
         r->dl_buckets = calloc(shaper->params.nic_count, sizeof(TokenBucket));
         r->ul_buckets = calloc(shaper->params.nic_count, sizeof(TokenBucket));
         if (!r->dl_buckets || !r->ul_buckets) {
-            set_error(shaper, "OOM: failed to allocate rule buckets");
+            set_error(shaper, C(CLI_ERR_SHAPER_OOM_R_BUCKET));
             free(r->dl_buckets); free(r->ul_buckets); free(r);
             return false;
         }
@@ -629,7 +630,7 @@ static bool init_global_buckets(ShaperInstance *s) {
     s->download_buckets = malloc(s->params.nic_count * sizeof(TokenBucket));
     s->upload_buckets = malloc(s->params.nic_count * sizeof(TokenBucket));
     if (!s->download_buckets || !s->upload_buckets) {
-        set_error(s, "OOM allocating token buckets");
+        set_error(s, C(CLI_ERR_SHAPER_OOM_T_BUCKET));
         destroy_global_buckets(s);
         return false;
     }
@@ -644,14 +645,14 @@ static bool init_global_buckets(ShaperInstance *s) {
         if (s->params.download_limits[i] > 0) {
             int burst = s->burst_size > 0 ? s->burst_size : (int)s->download_buffer_size;
             if (!token_bucket_init(&s->download_buckets[i], s->params.download_limits[i], burst)) {
-                char msg[128]; snprintf(msg, sizeof(msg), "Failed to init download bucket %d", i);
+                char msg[128]; snprintf(msg, sizeof(msg), C(CLI_ERR_INIT_DL_BUCKET), i);
                 set_error(s, msg); destroy_global_buckets(s); return false;
             }
         }
         if (s->params.upload_limits[i] > 0) {
             int burst = s->burst_size > 0 ? s->burst_size : (int)s->upload_buffer_size;
             if (!token_bucket_init(&s->upload_buckets[i], s->params.upload_limits[i], burst)) {
-                char msg[128]; snprintf(msg, sizeof(msg), "Failed to init upload bucket %d", i);
+                char msg[128]; snprintf(msg, sizeof(msg), C(CLI_ERR_INIT_UL_BUCKET), i);
                 set_error(s, msg); destroy_global_buckets(s); return false;
             }
         }
@@ -682,7 +683,7 @@ static bool init_rule_buckets(ShaperInstance *s) {
         if (!(r->flags & RULE_FLAG_DL_BLOCKED)) {
             r->dl_buckets = calloc(s->params.nic_count, sizeof(TokenBucket));
             if (!r->dl_buckets) {
-                set_error(s, "OOM allocating per-rule DL buckets");
+                set_error(s, C(CLI_ERR_SHAPER_OOM_PR_DL_B));
                 return false;
             }
         }
@@ -690,7 +691,7 @@ static bool init_rule_buckets(ShaperInstance *s) {
         if (!(r->flags & RULE_FLAG_UL_BLOCKED)) {
             r->ul_buckets = calloc(s->params.nic_count, sizeof(TokenBucket));
             if (!r->ul_buckets) {
-                set_error(s, "OOM allocating per-rule UL buckets");
+                set_error(s, C(CLI_ERR_SHAPER_OOM_PR_UL_B));
                 return false;
             }
         }
@@ -729,7 +730,7 @@ static bool init_rule_buckets(ShaperInstance *s) {
                 if (dl > 0) {
                     if (!token_bucket_init(&r->dl_buckets[n], dl, burst)) {
                         char msg[256];
-                        snprintf(msg, sizeof(msg), "Failed to init rule DL bucket for %s", r->name);
+                        snprintf(msg, sizeof(msg), C(CLI_ERR_SHAPER_IR_DL_B), r->name);
                         set_error(s, msg);
                         return false;
                     }
@@ -757,7 +758,7 @@ static bool init_rule_buckets(ShaperInstance *s) {
                 if (ul > 0) {
                     if (!token_bucket_init(&r->ul_buckets[n], ul, burst)) {
                         char msg[256];
-                        snprintf(msg, sizeof(msg), "Failed to init rule UL bucket for %s", r->name);
+                        snprintf(msg, sizeof(msg), C(CLI_ERR_SHAPER_IR_UL_B), r->name);
                         set_error(s, msg);
                         return false;
                     }
@@ -792,7 +793,7 @@ static bool copy_throttling_params(ShaperInstance *s, const ThrottlingParams *sr
     s->params.upload_limits = (double*)malloc(src->nic_count * sizeof(double));
 
     if (!s->params.nic_indices || !s->params.download_limits || !s->params.upload_limits) {
-        set_error(s, "OOM copying ThrottlingParams");
+        set_error(s, C(CLI_ERR_SHAPER_OOM_TPARAMS));
         free(s->params.nic_indices);
         free(s->params.download_limits);
         free(s->params.upload_limits);
@@ -841,7 +842,7 @@ static bool copy_process_params(ShaperInstance *s, const ProcessParams *src) {
     if (src->process_list) {
         s->processparams.process_list = strdup(src->process_list);
         if (!s->processparams.process_list) {
-            set_error(s, "OOM copying process_list"); return false;
+            set_error(s, C(CLI_ERR_SHAPER_OOM_PLIST)); return false;
         }
     }
     return true;
@@ -1029,15 +1030,15 @@ void shaper_destroy(ShaperInstance *shaper) {
 // -----------------------------------------------------------------------
 bool shaper_start(ShaperInstance *shaper, const ShaperConfig *config) {
     if (!shaper || !config || !config->params) {
-        if (shaper) set_error(shaper, "Invalid configuration");
+        if (shaper) set_error(shaper, C(CLI_ERR_SHAPER_INVALID_CONF));
         return false;
     }
 
-    if (shaper->is_running) { set_error(shaper, "Already running"); return false; }
+    if (shaper->is_running) { set_error(shaper, C(CLI_ERR_SHAPER_RUNNING)); return false; }
 
     // Prevent restart if thread is still cleaning up
     if (shaper->thread_state == SHAPER_THREAD_STOPPING) {
-        set_error(shaper, "Previous stop still in progress");
+        set_error(shaper, C(CLI_ERR_SHAPER_STOPPING));
         return false;
     }
 
@@ -1086,7 +1087,7 @@ bool shaper_start(ShaperInstance *shaper, const ShaperConfig *config) {
     // Critical section
     if (!shaper->lock_initialized) {
         if (!InitializeCriticalSectionAndSpinCount(&shaper->global_lock, 4000)) {
-            set_error(shaper, "Failed to initialize critical section");
+            set_error(shaper, C(CLI_ERR_SHAPER_INIT_CSEC));
             return false;
         }
         shaper->lock_initialized = true;
@@ -1094,7 +1095,7 @@ bool shaper_start(ShaperInstance *shaper, const ShaperConfig *config) {
 
     // Delay buffer
     if (!delay_buffer_init(&shaper->delay_buffer, DELAY_BUFFER_SIZE)) {
-        set_error(shaper, "Failed to initialize delay buffer");
+        set_error(shaper, C(CLI_ERR_SHAPER_INIT_D_BUF));
         return false;
     }
 
@@ -1125,7 +1126,7 @@ bool shaper_start(ShaperInstance *shaper, const ShaperConfig *config) {
                     for (int j = 0; j < pid_count; j++)
                         add_pid_to_map_pool(&shaper->processparams.pid_map, pid_list[j], &g_pid_pool);
                 } else {
-                    fprintf(stderr, "Warning: No PIDs found for process '%s'\n", procs[i]);
+                    fprintf(stderr, C(CLI_WARN_NO_PID_PROCESS), procs[i]);
                 }
                 if (pid_list) free(pid_list);
                 free(procs[i]);
@@ -1135,21 +1136,20 @@ bool shaper_start(ShaperInstance *shaper, const ShaperConfig *config) {
     }
 
     // Open WinDivert
-    shaper->windivert_handle = WinDivertOpen(
-        "tcp or udp", WINDIVERT_LAYER_NETWORK, shaper->priority, 0);
+    shaper->windivert_handle = WinDivertOpen("tcp or udp", WINDIVERT_LAYER_NETWORK, shaper->priority, 0);
 
     if (shaper->windivert_handle == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
         char  msg[256];
         switch (err) {
-            case 2:    snprintf(msg, sizeof(msg), "WinDivert driver files not found (error 2)"); break;
-            case 5:    snprintf(msg, sizeof(msg), "Permission denied - run as Administrator (error 5)"); break;
-            case 87:   snprintf(msg, sizeof(msg), "Invalid WinDivert filter / parameter (error 87)"); break;
-            case 577:  snprintf(msg, sizeof(msg), "WinDivert driver signature invalid (error 577)"); break;
-            case 1058: snprintf(msg, sizeof(msg), "Stale WinDivert instance - restart required (error 1058)"); break;
-            case 1275: snprintf(msg, sizeof(msg), "WinDivert driver blocked - bitness mismatch? (error 1275)"); break;
-            case 1753: snprintf(msg, sizeof(msg), "Base Filtering Engine service not running (error 1753)"); break;
-            default:   snprintf(msg, sizeof(msg), "WinDivertOpen failed: %lu", err); break;
+            case 2:    snprintf(msg, sizeof(msg), C(CLI_ERR_WINDIVERT_2)); break;
+            case 5:    snprintf(msg, sizeof(msg), C(CLI_ERR_WINDIVERT_5)); break;
+            case 87:   snprintf(msg, sizeof(msg), C(CLI_ERR_WINDIVERT_87)); break;
+            case 577:  snprintf(msg, sizeof(msg), C(CLI_ERR_WINDIVERT_577)); break;
+            case 1058: snprintf(msg, sizeof(msg), C(CLI_ERR_WINDIVERT_1058)); break;
+            case 1275: snprintf(msg, sizeof(msg), C(CLI_ERR_WINDIVERT_1275)); break;
+            case 1753: snprintf(msg, sizeof(msg), C(CLI_ERR_WINDIVERT_1753)); break;
+            default:   snprintf(msg, sizeof(msg), C(CLI_ERR_WINDIVERT_DEF), err); break;
         }
         set_error(shaper, msg);
         destroy_global_buckets(shaper);
@@ -1160,7 +1160,7 @@ bool shaper_start(ShaperInstance *shaper, const ShaperConfig *config) {
     // Pre-allocate recv_event in the instance
     shaper->recv_event = CreateEvent(NULL, FALSE, FALSE, NULL);
     if (!shaper->recv_event) {
-        set_error(shaper, "Failed to create recv event");
+        set_error(shaper, C(CLI_ERR_SHAPER_CREATE_RECV));
         WinDivertClose(shaper->windivert_handle);
         shaper->windivert_handle = INVALID_HANDLE_VALUE;
         return false;
@@ -1180,7 +1180,7 @@ bool shaper_start(ShaperInstance *shaper, const ShaperConfig *config) {
         0, NULL);
 
     if (!shaper->worker_thread) {
-        set_error(shaper, "Failed to create worker thread");
+        set_error(shaper, C(CLI_ERR_SHAPER_C_W_THREAD));
         // Clean up everything shaper_start() opened
         WinDivertClose(shaper->windivert_handle);
         shaper->windivert_handle = INVALID_HANDLE_VALUE;
@@ -1268,15 +1268,15 @@ void shaper_stop(ShaperInstance *shaper) {
 // -----------------------------------------------------------------------
 bool shaper_reload(ShaperInstance *shaper, const ShaperConfig *config) {
     if (!shaper || !config) {
-        if (shaper) set_error(shaper, "Invalid configuration");
+        if (shaper) set_error(shaper, C(CLI_ERR_SHAPER_INVALID_CONF));
         return false;
     }
 
     if (!shaper->is_running) {
-        set_error(shaper, "Cannot reload: not running");
+        set_error(shaper, C(CLI_ERR_SHAPER_RELOAD));
         return false;
     }
-    CORE_PRINTF(shaper, "\nReloading configuration (brief interruption)...\n");
+    CORE_PRINTF(shaper, C(CLI_RELOAD_CONF));
 
     // Signal the worker to exit first
     InterlockedExchange((LONG*)&shaper->should_stop, TRUE);
@@ -1312,7 +1312,7 @@ bool shaper_reload(ShaperInstance *shaper, const ShaperConfig *config) {
     // Deep copy old params for potential rollback
     if (!copy_throttling_params_safe(&old_params, &shaper->params) ||
         !copy_process_params_safe(&old_processparams, &shaper->processparams)) {
-        set_error(shaper, "Failed to backup old state during reload");
+        set_error(shaper, C(CLI_ERR_SHAPER_B_RELOAD));
         return false;
     }
 
@@ -1348,7 +1348,7 @@ bool shaper_reload(ShaperInstance *shaper, const ShaperConfig *config) {
 
     if (!copy_ok) {
         // Restore old state
-        CORE_PRINTF(shaper, "Reload failed - restoring previous configuration\n");
+        CORE_PRINTF(shaper, C(CLI_ERR_RESTORE_CONF));
 
         // Restore throttling params
         free(shaper->params.nic_indices);
@@ -1367,12 +1367,12 @@ bool shaper_reload(ShaperInstance *shaper, const ShaperConfig *config) {
 
         // Re-initialize with old params
         if (!init_global_buckets(shaper) || !init_rule_buckets(shaper)) {
-            set_error(shaper, "Fatal: Failed to restore old config after reload failure");
+            set_error(shaper, C(CLI_ERR_SHAPER_B_RESTORE));
             shaper->is_running = false;
             return false;
         }
 
-        set_error(shaper, "Reload failed - configuration unchanged");
+        set_error(shaper, C(CLI_ERR_SHAPER_RELOAD_CONF));
         return false;
     }
 
@@ -1394,7 +1394,7 @@ bool shaper_reload(ShaperInstance *shaper, const ShaperConfig *config) {
     shaper->enable_statistics = config->enable_statistics;
 
     if (shaper->params.nic_count == 0) {
-        set_error(shaper, "Reload error: no NICs specified");
+        set_error(shaper, C(CLI_ERR_SHAPER_RELOAD_NIC));
         return false;
     }
 
@@ -1412,19 +1412,17 @@ bool shaper_reload(ShaperInstance *shaper, const ShaperConfig *config) {
 
     // Log schedule change (simplified, without schedule_describe)
     if (memcmp(&old_global_schedule, &shaper->global_schedule, sizeof(Schedule)) != 0) {
-        CORE_PRINTF(shaper, "Global schedule updated (new schedule applied)\n");
+        CORE_PRINTF(shaper, C(CLI_NEW_SCHEDULE));
     }
 
     if (old_quota_interval != shaper->quota_check_interval_ms) {
-        CORE_PRINTF(shaper, "Quota check interval changed: %u ms -> %u ms\n",
-                    old_quota_interval, shaper->quota_check_interval_ms);
+        CORE_PRINTF(shaper, C(CLI_QUOTA_CHECK_INTERVAL), old_quota_interval, shaper->quota_check_interval_ms);
     }
 
     // Re-open WinDivert with the (potentially new) priority
-    shaper->windivert_handle = WinDivertOpen(
-        "tcp or udp", WINDIVERT_LAYER_NETWORK, shaper->priority, 0);
+    shaper->windivert_handle = WinDivertOpen("tcp or udp", WINDIVERT_LAYER_NETWORK, shaper->priority, 0);
     if (shaper->windivert_handle == INVALID_HANDLE_VALUE) {
-        set_error(shaper, "Failed to re-open WinDivert after reload");
+        set_error(shaper, C(CLI_ERR_SHAPER_REOPEN_WD));
         shaper->is_running = false;
         shaper->thread_state = SHAPER_THREAD_IDLE;
         return false;
@@ -1433,7 +1431,7 @@ bool shaper_reload(ShaperInstance *shaper, const ShaperConfig *config) {
     // Pre-allocate recv_event in the instance
     shaper->recv_event = CreateEvent(NULL, FALSE, FALSE, NULL);
     if (!shaper->recv_event) {
-        set_error(shaper, "Failed to create recv event");
+        set_error(shaper, C(CLI_ERR_SHAPER_CREATE_RECV));
         WinDivertClose(shaper->windivert_handle);
         shaper->windivert_handle = INVALID_HANDLE_VALUE;
         shaper->is_running = false;
@@ -1449,7 +1447,7 @@ bool shaper_reload(ShaperInstance *shaper, const ShaperConfig *config) {
         0, NULL);
 
     if (!shaper->worker_thread) {
-        set_error(shaper, "Failed to recreate worker thread after reload");
+        set_error(shaper, C(CLI_ERR_SHAPER_R_W_THREAD));
         WinDivertClose(shaper->windivert_handle);
         shaper->windivert_handle = INVALID_HANDLE_VALUE;
         CloseHandle(shaper->recv_event);
@@ -1460,7 +1458,7 @@ bool shaper_reload(ShaperInstance *shaper, const ShaperConfig *config) {
     }
     shaper->thread_state = SHAPER_THREAD_RUNNING;
 
-    CORE_PRINTF(shaper, "Reload complete.\n");
+    CORE_PRINTF(shaper, C(CLI_RELOAD_COMPLETE));
     return true;
 }
 
@@ -1529,7 +1527,7 @@ static void shaper_packet_loop_internal(ShaperInstance *shaper) {
                     break;
                 } else {
                     if (shaper->should_stop) break;
-                    fprintf(stderr, "WinDivertRecvEx failed: %lu\n", err);
+                    fprintf(stderr, C(CLI_ERR_WINDIVERTRECVEX), err);
                     continue;
                 }
             } else {
@@ -1581,7 +1579,7 @@ static void shaper_packet_loop_internal(ShaperInstance *shaper) {
 
                 if (total >= shaper->data_cap_bytes && !shaper->cap_reached) {
                     shaper->cap_reached = true;
-                    printf("*** DATA CAP REACHED! Total: %I64d bytes ***\n", total);
+                    printf(C(CLI_DATA_CAP_REACHED), total);
                     // Drop this packet and all future packets
                     dropped_rate = true;
                     packet_handled = true;
@@ -1727,7 +1725,7 @@ static void shaper_packet_loop_internal(ShaperInstance *shaper) {
                 // Log once per session to avoid spam
                 static bool warned = false;
                 if (!warned) {
-                    fprintf(stderr, "Warning: PID %lu not found in reverse index, falling back to linear scan\n", pid);
+                    fprintf(stderr, C(CLI_WARN_PID_RINDEX), pid);
                     warned = true;
                 }
 
@@ -1883,7 +1881,7 @@ static void shaper_packet_loop_internal(ShaperInstance *shaper) {
     flush_batch_stats_final(shaper);
 
     if (!shutdown_message_printed) {
-        CORE_PRINTF(shaper, "Shutdown initiated...\n");
+        CORE_PRINTF(shaper, C(CLI_INITIATE_SHUTDOWN));
         shutdown_message_printed = true;
         Sleep(100);
     }
@@ -2454,7 +2452,7 @@ bool shaper_refresh_rule_buckets(ShaperInstance *shaper) {
 
 bool shaper_reload_rules(ShaperInstance *shaper) {
     if (!shaper || !shaper->is_running) {
-        set_error(shaper, "Cannot reload rules: shaper not running");
+        set_error(shaper, C(CLI_ERR_SHAPER_RELOAD_RULES));
         return false;
     }
 
@@ -2480,7 +2478,7 @@ bool shaper_reload_rules(ShaperInstance *shaper) {
                 LeaveCriticalSection(&shaper->global_lock);
                 free(rules_to_refresh);
                 LeaveCriticalSection(&shaper->rule_update_lock);
-                set_error(shaper, "Out of memory during rule reload");
+                set_error(shaper, C(CLI_ERR_SHAPER_OOM_RELOAD_R));
                 return false;
             }
             rules_to_refresh = new_arr;
@@ -2520,7 +2518,7 @@ bool shaper_reload_rules(ShaperInstance *shaper) {
                 free(pid_list);
                 free(rules_to_refresh);
                 LeaveCriticalSection(&shaper->rule_update_lock);
-                set_error(shaper, "Out of memory during rule reload");
+                set_error(shaper, C(CLI_ERR_SHAPER_OOM_RELOAD_R));
                 return false;
             }
 

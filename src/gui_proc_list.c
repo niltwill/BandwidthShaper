@@ -8,6 +8,7 @@
 #include "resource.h"
 #include "shaper_core.h"
 #include "schedule.h"
+#include "localization_api.h"
 #include <commctrl.h>
 #include <psapi.h>
 #include <shellapi.h>
@@ -43,6 +44,289 @@ ProcFilter GetProcFilter(void) {
 }
 
 // ---------------------------------------------------------------------------
+// Column sizing helpers
+// ---------------------------------------------------------------------------
+static int MeasureHeaderTextWidth(const wchar_t* text)
+{
+    HDC hdc = GetDC(g_app.hMainWnd);
+    if (!hdc) return S(75);
+
+    HFONT hOld = SelectObject(hdc, g_app.hUiFont);
+    SIZE sz = {0};
+    GetTextExtentPoint32W(hdc, text, (int)wcslen(text), &sz);
+    SelectObject(hdc, hOld);
+    ReleaseDC(g_app.hMainWnd, hdc);
+
+    return sz.cx + S(28);  // margins + room for sort arrow
+}
+
+int GetProcessListColumnWidth(int col, bool include_sort_arrow)
+{
+    if (col < 0 || col >= ListView_ColumnCount) return S(75);
+
+    const wchar_t* col_names[] = {
+        T(GUI_COL_PROCESS),  T(GUI_COL_PID),
+        T(GUI_COL_DOWNLOAD), T(GUI_COL_UPLOAD),
+        T(GUI_COL_DL_LIMIT), T(GUI_COL_UL_LIMIT),
+        T(GUI_COL_QUOTA_IN), T(GUI_COL_QUOTA_OUT),
+        T(GUI_COL_SCHEDULE), T(GUI_COL_ACTIONS)
+    };
+
+    const wchar_t* text = col_names[col];
+    wchar_t buf[64] = {0};
+
+    if (include_sort_arrow && col == g_app.sort_column) {
+        swprintf(buf, 64, L"%s %s", text,
+                 g_app.sort_ascending ? UP_ARROW : DOWN_ARROW);
+        text = buf;
+    }
+    return MeasureHeaderTextWidth(text);
+}
+
+// Manual content measurement for virtual-mode ListView at init
+// (LVSCW_AUTOSIZE doesn't work before the window is visible)
+static int MeasureMaxContentWidth(int col)
+{
+    HDC hdc = GetDC(g_app.hProcessList);
+    if (!hdc) return S(75);
+    HFONT hFont = (HFONT)SendMessage(g_app.hProcessList, WM_GETFONT, 0, 0);
+    HFONT hOld = SelectObject(hdc, hFont ? hFont : g_app.hUiFont);
+
+    int maxW = 0;
+    short bufSize = 256;
+    wchar_t buf[256];
+
+    int sampleRows = (g_row_count < 300) ? g_row_count : 300;
+
+    for (int r = 0; r < sampleRows; r++) {
+        DisplayRow* dr = &g_rows[r];
+        ProcessEntry* proc = &g_app.processes[dr->proc_idx];
+        bool is_sub = (dr->pid_sub >= 0);
+        int psub = dr->pid_sub;
+
+        buf[0] = L'\0';
+        switch (col) {
+        case 0: { // Process
+            const wchar_t *marker = L" ";
+            if (!is_sub && proc->is_sticky)
+                marker = proc->is_running ? MARKER_RUNNING : MARKER_GHOST;
+
+            if (is_sub) {
+                swprintf(buf, bufSize, L"    %s PID %lu ", SUB_PID, proc->pids[psub]);
+            } else if (proc->pid_count > 1) {
+                swprintf(buf, bufSize, L"%s%s %s ",
+                         marker, proc->expanded ? DOWN_ARROW : RIGHT_ARROW, proc->name);
+            } else {
+                swprintf(buf, bufSize, L"%s%s ", marker, proc->name);
+            }
+            break;
+        }
+        case 1: // PID
+            if (is_sub) {
+                swprintf(buf, bufSize, L"%lu ", proc->pids[psub]);
+            } else if (proc->pid_count == 0) {
+                wcsncpy(buf, MARKER_NOTRUNNING, bufSize);
+            } else if (proc->pid_count == 1) {
+                swprintf(buf, bufSize, L"%lu ", proc->pids[0]);
+            } else {
+                swprintf(buf, bufSize, T(GUI_CELL_GROUPED_PIDS), proc->pid_count);
+            }
+            break;
+        case 2: // Download
+            if (is_sub)
+                FormatRateFixed(buf, bufSize, proc->pid_dl_rate[psub]);
+            else if (proc->pid_count == 0)
+                buf[0] = L'\0';
+            else
+                FormatRateFixed(buf, bufSize, proc->dl_rate);
+            break;
+        case 3: // Upload
+            if (is_sub)
+                FormatRateFixed(buf, bufSize, proc->pid_ul_rate[psub]);
+            else if (proc->pid_count == 0)
+                buf[0] = L'\0';
+            else
+                FormatRateFixed(buf, bufSize, proc->ul_rate);
+            break;
+        case 4: { // DL Limit
+            double lim = 0.0;
+            buf[0] = L'\0';
+            if (is_sub) {
+                if (proc->pid_dl_limit[psub] != 0.0) lim = proc->pid_dl_limit[psub];
+                else lim = proc->dl_limit;
+
+                if (lim > 0) FormatRateFixed(buf, bufSize, lim);
+                else if (lim < 0) wcsncpy(buf, T(GUI_CELL_BLOCKED), bufSize);
+                else wcsncpy(buf, L"-", bufSize);
+            } else {
+                lim = proc->dl_limit;
+                bool has_per_pid = false;
+                bool all_same = true;
+                double first_nonzero = 0.0;
+                bool first_found = false;
+
+                for (int p = 0; p < proc->pid_count; p++) {
+                    if (proc->pid_dl_limit[p] != 0.0) {
+                        has_per_pid = true;
+                        if (!first_found) { first_nonzero = proc->pid_dl_limit[p]; first_found = true; }
+                        else if (proc->pid_dl_limit[p] != first_nonzero) { all_same = false; break; }
+                    }
+                }
+
+                if (lim > 0) FormatRateFixed(buf, bufSize, lim);
+                else if (lim < 0) wcsncpy(buf, T(GUI_CELL_BLOCKED), bufSize);
+                else wcsncpy(buf, L"-", bufSize);
+
+                if (has_per_pid && !all_same) {
+                    wcsncat(buf, L" *", bufSize - wcslen(buf) - 1);
+                }
+            }
+            break;
+        }
+        case 5: { // UL Limit
+            double lim = 0.0;
+            buf[0] = L'\0';
+            if (is_sub) {
+                if (proc->pid_ul_limit[psub] != 0.0) lim = proc->pid_ul_limit[psub];
+                else lim = proc->ul_limit;
+
+                if (lim > 0) FormatRateFixed(buf, bufSize, lim);
+                else if (lim < 0) wcsncpy(buf, T(GUI_CELL_BLOCKED), bufSize);
+                else wcsncpy(buf, L"-", bufSize);
+            } else {
+                lim = proc->ul_limit;
+                bool has_per_pid = false;
+                bool all_same = true;
+                double first_nonzero = 0.0;
+                bool first_found = false;
+
+                for (int p = 0; p < proc->pid_count; p++) {
+                    if (proc->pid_ul_limit[p] != 0.0) {
+                        has_per_pid = true;
+                        if (!first_found) { first_nonzero = proc->pid_ul_limit[p]; first_found = true; }
+                        else if (proc->pid_ul_limit[p] != first_nonzero) { all_same = false; break; }
+                    }
+                }
+
+                if (lim > 0) FormatRateFixed(buf, bufSize, lim);
+                else if (lim < 0) wcsncpy(buf, T(GUI_CELL_BLOCKED), bufSize);
+                else wcsncpy(buf, L"-", bufSize);
+                
+                if (has_per_pid && !all_same) {
+                    wcsncat(buf, L" *", bufSize - wcslen(buf) - 1);
+                }
+            }
+            break;
+        }
+        case 6: { // Quota In
+            buf[0] = L'\0';
+            if (is_sub) break;
+
+            if (proc->quota_in == 0) {
+                wcsncpy(buf, L"-", bufSize);
+            } else {
+                bool exhausted = (proc->quota_in_used >= proc->quota_in);
+                double mb_limit = (double)proc->quota_in / (1024.0 * 1024.0);
+                double mb_used = (double)proc->quota_in_used / (1024.0 * 1024.0);
+
+                if (exhausted)
+                    swprintf(buf, bufSize, L"%.1f/%.1f MB ! ", mb_used, mb_limit);
+                else
+                    swprintf(buf, bufSize, L"%.1f/%.1f MB ", mb_used, mb_limit);
+            }
+            break;
+        }
+        case 7: { // Quota Out
+            buf[0] = L'\0';
+            if (is_sub) break;
+
+            if (proc->quota_out == 0) {
+                wcsncpy(buf, L"-", bufSize);
+            } else {
+                bool exhausted = (proc->quota_out_used >= proc->quota_out);
+                double mb_limit = (double)proc->quota_out / (1024.0 * 1024.0);
+                double mb_used = (double)proc->quota_out_used / (1024.0 * 1024.0);
+
+                if (exhausted)
+                    swprintf(buf, bufSize, L"%.1f/%.1f MB ! ", mb_used, mb_limit);
+                else
+                    swprintf(buf, bufSize, L"%.1f/%.1f MB ", mb_used, mb_limit);
+            }
+            break;
+        }
+        case 8: { // Schedule
+            buf[0] = L'\0';
+            if (is_sub) break;
+
+            // Matches LVN_GETDISPINFO logic exactly
+            wchar_t sched_buf[SCHEDULE_STR_MAX];
+            schedule_formatw(&proc->schedule, sched_buf, SCHEDULE_STR_MAX);
+
+            if (sched_buf[0] == L'\0') {
+                wcsncpy(buf, L"-", bufSize);
+            } else {
+                wcsncpy(buf, sched_buf, bufSize);
+            }
+            break;
+        }
+        case 9: { // Actions
+            buf[0] = L'\0';
+            if (!is_sub && (proc->dl_limit != 0 || proc->ul_limit != 0)) {
+                wcsncpy(buf, T(GUI_CELL_LIMITED), bufSize);
+            }
+            break;
+        }
+        }
+
+        if (buf[0]) {
+            SIZE sz;
+            GetTextExtentPoint32W(hdc, buf, (int)wcslen(buf), &sz);
+            int w = sz.cx;
+            // Parent rows in col 0 need extra space for the icon
+            if (col == 0 && !is_sub && proc->icon_index >= 0)
+                w += S(24);
+            if (w > maxW) maxW = w;
+        }
+    }
+
+    SelectObject(hdc, hOld);
+    ReleaseDC(g_app.hProcessList, hdc);
+
+    return maxW + S(12); // cell padding
+}
+
+void AutoSizeProcessListColumn(int col, bool userTriggered)
+{
+    if (!g_app.hProcessList || col < 0 || col >= ListView_ColumnCount) return;
+
+    int headerWidth = GetProcessListColumnWidth(col, true);
+    int minWidth = S(40);
+    int contentWidth = 0;
+
+    // When user double-clicks a header
+    if (userTriggered && g_row_count > 0) {
+        // Let the ListView compute the best-fit width based on current items
+        ListView_SetColumnWidth(g_app.hProcessList, col, LVSCW_AUTOSIZE);
+        contentWidth = ListView_GetColumnWidth(g_app.hProcessList, col);
+    } else {
+        // At init (or empty list) measure the data ourselves
+        contentWidth = MeasureMaxContentWidth(col);
+    }
+
+    int w = contentWidth;
+    if (w < headerWidth) w = headerWidth;
+    if (w < minWidth) w = minWidth;
+    
+    ListView_SetColumnWidth(g_app.hProcessList, col, w);
+}
+
+void AutoSizeProcessListColumns(void)
+{
+    for (int i = 0; i < ListView_ColumnCount; i++)
+        AutoSizeProcessListColumn(i, false);
+}
+
+// ---------------------------------------------------------------------------
 // Initialization
 // ---------------------------------------------------------------------------
 void CreateProcessList(HWND hWnd) {
@@ -55,36 +339,33 @@ void CreateProcessList(HWND hWnd) {
     ListView_SetExtendedListViewStyle(g_app.hProcessList,
         LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
 
-    // Add columns (same as before)
+    // Add columns
     LVCOLUMNW lvc = {0};
     lvc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
     wchar_t header_text[64];
 
-    struct { const wchar_t* text; int width; } cols[] = {  // make sure to keep this consistent in "onDpiChanged()"
-        {L"Process",   S(170)},
-        {L"PID",       S(55)},
-        {L"Download",  S(75)},
-        {L"Upload",    S(75)},
-        {L"DL Limit",  S(75)},
-        {L"UL Limit",  S(75)},
-        {L"Quota In",  S(80)},
-        {L"Quota Out", S(80)},
-        {L"Schedule",  S(100)},
-        {L"Actions",   S(70)}
+    // make sure to keep this consistent in "onDpiChanged()"
+    const wchar_t* col_names[] = {
+        T(GUI_COL_PROCESS),  T(GUI_COL_PID),
+        T(GUI_COL_DOWNLOAD), T(GUI_COL_UPLOAD),
+        T(GUI_COL_DL_LIMIT), T(GUI_COL_UL_LIMIT),
+        T(GUI_COL_QUOTA_IN), T(GUI_COL_QUOTA_OUT),
+        T(GUI_COL_SCHEDULE), T(GUI_COL_ACTIONS)
     };
 
-    for (int i = 0; i < ListView_ColumnCount; i++) {  // Need to have the same number as the defined columns
+    // Need to have the same number as the defined columns
+    for (int i = 0; i < ListView_ColumnCount; i++) {
         lvc.iSubItem = i;
 
         // Add sort arrow to the saved sort column with correct direction
         if (i == g_app.sort_column) {
-            swprintf(header_text, 64, L"%s %s", cols[i].text, g_app.sort_ascending ? UP_ARROW : DOWN_ARROW);
+            swprintf(header_text, 64, L"%s %s", col_names[i], g_app.sort_ascending ? UP_ARROW : DOWN_ARROW);
             lvc.pszText = header_text;
         } else {
-            lvc.pszText = (LPWSTR)cols[i].text;
+            lvc.pszText = (LPWSTR)col_names[i];
         }
 
-        lvc.cx = cols[i].width;
+        lvc.cx = GetProcessListColumnWidth(i, false);
         ListView_InsertColumn(g_app.hProcessList, i, &lvc);
     }
 
@@ -97,7 +378,6 @@ void CreateProcessList(HWND hWnd) {
         ListView_SetExtendedListViewStyle(g_app.hProcessList,
             LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
     }
-
 }
 
 void InitProcessListColumns(void) {
@@ -232,7 +512,7 @@ void RefreshProcessList(void) {
             } else {
                 // Log warning - too many instances of same process
                 wchar_t s[128];
-                swprintf(s, 128, L"Warning: Process has more than %u instances, some ignored\n", MAX_PID_FOR_PROCESS);
+                swprintf(s, 128, T(GUI_WARN_TOO_MANY_PIDS), MAX_PID_FOR_PROCESS);
                 OutputDebugStringW(s);
             }
         } else {
@@ -462,7 +742,7 @@ void RefreshProcessList(void) {
 
     // Update status bar
     wchar_t status[64];
-    swprintf(status, 64, L"%d processes (%d instances)", g_app.process_count, rawCount);
+    swprintf(status, 64, T(GUI_STATUS_PROCESSES), g_app.process_count, rawCount);
     SendMessage(g_app.hStatusBar, SB_SETTEXT, 1, (LPARAM)status);
 }
 
@@ -1121,8 +1401,8 @@ void ShowSetQuotaDialog(HWND hParent, int proc_idx, int pid_sub, bool is_in) {
     // Quota can only be set on group rows, not PID sub-rows
     if (pid_sub >= 0) {
         MSGBOX(hParent,
-            L"Quotas can only be set on the process group level, not on individual PIDs.",
-            L"Set Quota", MB_OK | MB_ICONINFORMATION);
+            T(GUI_QUOTA_GROUP_ONLY),
+            T(GUI_QUOTA_SET), MB_OK | MB_ICONINFORMATION);
         return;
     }
 
@@ -1260,11 +1540,11 @@ void Cmd_LocateProcess(HWND hWnd) {
     OPENFILENAMEW ofn = {0};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = hWnd;
-    ofn.lpstrFilter = L"Executables (*.exe)\0*.exe\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFilter = T(GUI_DLG_LOCATE_FILTER);
     ofn.lpstrFile = path;
     ofn.nMaxFile = MAX_PATH;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
-    ofn.lpstrTitle = L"Locate Process Executable";
+    ofn.lpstrTitle = T(GUI_DLG_LOCATE_OPENTITLE);
     if (!GetOpenFileNameW(&ofn)) return;
 
     wchar_t *fname = wcsrchr(path, L'\\');
@@ -1272,14 +1552,15 @@ void Cmd_LocateProcess(HWND hWnd) {
 
     int si = UpsertStickyProc(fname, path);
     if (si < 0) {
-        MSGBOX(hWnd, L"Sticky process list is full (max 64).",
-                    L"Locate Process", MB_OK | MB_ICONWARNING);
+        wchar_t err[256];
+        swprintf(err, 256, T(GUI_STICKY_LIST_FULL), MAX_STICKY_PROCS);
+        MSGBOX(hWnd, err, T(GUI_DLG_LOCATE_TITLE), MB_OK | MB_ICONWARNING);
         return;
     }
     RefreshProcessList();
     Sticky_Save();
     wchar_t msg[MAX_PATH + 64];
-    swprintf(msg, MAX_PATH + 64, L"Sticky entry added: %s",
+    swprintf(msg, MAX_PATH + 64, T(GUI_STICKY_ADDED),
              g_app.sticky_procs[si].name);
     SendMessageW(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)msg);
 }
@@ -1296,14 +1577,15 @@ void Cmd_SpecifyProcess(HWND hWnd) {
 
     int si = UpsertStickyProc(name, NULL);
     if (si < 0) {
-        MSGBOX(hWnd, L"Sticky process list is full (max 64).",
-                    L"Specify Process", MB_OK | MB_ICONWARNING);
+        wchar_t err[256];
+        swprintf(err, 256, T(GUI_STICKY_LIST_FULL), MAX_STICKY_PROCS);
+        MSGBOX(hWnd, err, T(GUI_DLG_SPECIFY_TITLE), MB_OK | MB_ICONWARNING);
         return;
     }
     RefreshProcessList();
     Sticky_Save();
     wchar_t msg[MAX_PATH + 64];
-    swprintf(msg, MAX_PATH + 64, L"Sticky entry added: %s",
+    swprintf(msg, MAX_PATH + 64, T(GUI_STICKY_ADDED),
              g_app.sticky_procs[si].name);
     SendMessageW(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)msg);
 }
@@ -1321,10 +1603,8 @@ void Cmd_RemoveStickyEntry(HWND hWnd) {
     if (!proc->is_sticky) {
         LeaveCriticalSection(&g_app.process_lock);
         MSGBOX(hWnd,
-            L"The selected process is not a sticky entry.\n\n"
-            L"Right-click a running process and choose \x201CPin as sticky \u25CC\x201D "
-            L"to make it persistent, or use File \x203A Locate / Specify process.",
-            L"Remove Sticky Entry", MB_OK | MB_ICONINFORMATION);
+            T(GUI_STICKY_NOT_ENTRY),
+            T(GUI_DLG_REMOVE_STICKY_CAP), MB_OK | MB_ICONINFORMATION);
         return;
     }
 
@@ -1334,11 +1614,9 @@ void Cmd_RemoveStickyEntry(HWND hWnd) {
 
     wchar_t confirm[MAX_PATH + 128];
     swprintf(confirm, MAX_PATH + 128,
-             L"Remove sticky entry for \"%s\"?\n\n"
-             L"Saved limits will be discarded. "
-             L"If the process is currently running it will stay in the list until it exits.",
+             T(GUI_STICKY_REMOVE_CONFIRM),
              proc_name);
-    if (MSGBOX(hWnd, confirm, L"Remove Sticky Entry",
+    if (MSGBOX(hWnd, confirm, T(GUI_DLG_REMOVE_STICKY_CAP),
                     MB_YESNO | MB_ICONQUESTION) != IDYES) return;
 
     wchar_t norm[MAX_PATH];
@@ -1561,41 +1839,15 @@ BOOL onProcessListNotify(HWND hWnd, LPARAM lParam) {
                 g_app.sort_ascending = true;
             }
 
-            // Update all column headers to remove arrows and add to new sort column
-            LVCOLUMNW lvc = {0};
-            lvc.mask = LVCF_TEXT;
-            wchar_t header_text[64];
-
-            // Column definitions (same as in CreateProcessList)
-            const wchar_t* col_names[] = {
-                L"Process", L"PID", L"Download", L"Upload",
-                L"DL Limit", L"UL Limit", L"Quota In", L"Quota Out", L"Schedule", L"Actions"
-            };
-
-            for (int i = 0; i < ListView_ColumnCount; i++) {
-                if (i == g_app.sort_column) {
-                    swprintf(header_text, 64, L"%s %s", col_names[i],
-                            g_app.sort_ascending ? UP_ARROW : DOWN_ARROW);
-                } else {
-                    wcsncpy(header_text, col_names[i], 64);
-                }
-
-                lvc.pszText = header_text;
-                ListView_SetColumn(g_app.hProcessList, i, &lvc);
-            }
-
-            // Refresh the display with new sort order
-            RebuildDisplayRows();
-            InvalidateRect(g_app.hProcessList, NULL, FALSE);
-
-            // Update status bar
-            wchar_t status[128];
-            swprintf(status, 128, L"Sorted by %s (%s)",
-                    col_names[g_app.sort_column],
-                    g_app.sort_ascending ? L"ascending" : L"descending");
-            SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)status);
+            RefreshProcessListColumns();
 
             return 0;
+        }
+
+        case HDN_DIVIDERDBLCLICK: {
+            LPNMHEADER phdr = (LPNMHEADER)lParam;
+            AutoSizeProcessListColumn(phdr->iItem, true);
+            return TRUE;  // suppress default shrink-to-nothing
         }
 
         case LVN_GETDISPINFO: {
@@ -1644,7 +1896,7 @@ BOOL onProcessListNotify(HWND hWnd, LPARAM lParam) {
                     } else if (proc->pid_count == 1) {
                         swprintf(pItem->pszText, pItem->cchTextMax, L"%lu", proc->pids[0]);
                     } else {
-                        swprintf(pItem->pszText, pItem->cchTextMax, L"%d inst.", proc->pid_count);
+                        swprintf(pItem->pszText, pItem->cchTextMax, T(GUI_CELL_GROUPED_PIDS), proc->pid_count);
                     }
                     break;
                 case 2: // Download rate
@@ -1678,7 +1930,7 @@ BOOL onProcessListNotify(HWND hWnd, LPARAM lParam) {
                         if (lim > 0)
                             FormatRateFixed(buf, sizeof(buf)/sizeof(wchar_t), lim);
                         else if (lim < 0)
-                            wcsncpy(buf, L"Blocked", sizeof(buf)/sizeof(wchar_t));
+                            wcsncpy(buf, T(GUI_CELL_BLOCKED), sizeof(buf)/sizeof(wchar_t));
                         else
                             wcsncpy(buf, L"-", sizeof(buf)/sizeof(wchar_t));
                     } else {
@@ -1708,7 +1960,7 @@ BOOL onProcessListNotify(HWND hWnd, LPARAM lParam) {
                         if (lim > 0)
                             FormatRateFixed(buf, sizeof(buf)/sizeof(wchar_t), lim);
                         else if (lim < 0)
-                            wcsncpy(buf, L"Blocked", sizeof(buf)/sizeof(wchar_t));
+                            wcsncpy(buf, T(GUI_CELL_BLOCKED), sizeof(buf)/sizeof(wchar_t));
                         else
                             wcsncpy(buf, L"-", sizeof(buf)/sizeof(wchar_t));
 
@@ -1736,7 +1988,7 @@ BOOL onProcessListNotify(HWND hWnd, LPARAM lParam) {
                         if (lim > 0)
                             FormatRateFixed(buf, sizeof(buf)/sizeof(wchar_t), lim);
                         else if (lim < 0)
-                            wcsncpy(buf, L"Blocked", sizeof(buf)/sizeof(wchar_t));
+                            wcsncpy(buf, T(GUI_CELL_BLOCKED), sizeof(buf)/sizeof(wchar_t));
                         else
                             wcsncpy(buf, L"-", sizeof(buf)/sizeof(wchar_t));
                     } else {
@@ -1766,7 +2018,7 @@ BOOL onProcessListNotify(HWND hWnd, LPARAM lParam) {
                         if (lim > 0)
                             FormatRateFixed(buf, sizeof(buf)/sizeof(wchar_t), lim);
                         else if (lim < 0)
-                            wcsncpy(buf, L"Blocked", sizeof(buf)/sizeof(wchar_t));
+                            wcsncpy(buf, T(GUI_CELL_BLOCKED), sizeof(buf)/sizeof(wchar_t));
                         else
                             wcsncpy(buf, L"-", sizeof(buf)/sizeof(wchar_t));
 
@@ -1843,7 +2095,7 @@ BOOL onProcessListNotify(HWND hWnd, LPARAM lParam) {
                     if (is_sub) {
                         pItem->pszText[0] = L'\0';
                     } else if (proc->dl_limit != 0 || proc->ul_limit != 0) {
-                        wcsncpy(pItem->pszText, L"[Limited]", pItem->cchTextMax);
+                        wcsncpy(pItem->pszText, T(GUI_CELL_LIMITED), pItem->cchTextMax);
                     } else {
                         pItem->pszText[0] = L'\0';
                     }
@@ -1877,35 +2129,35 @@ BOOL onProcessListNotify(HWND hWnd, LPARAM lParam) {
             GetCursorPos(&pt);
 
             HMENU hMenu = CreatePopupMenu();
-            AppendMenuW(hMenu, MF_STRING, 1, L"Set Download Limit...");
-            AppendMenuW(hMenu, MF_STRING, 2, L"Set Upload Limit...");
+            AppendMenuW(hMenu, MF_STRING, 1, T(GUI_MENU_SET_DL_LIMIT));
+            AppendMenuW(hMenu, MF_STRING, 2, T(GUI_MENU_SET_UL_LIMIT));
             AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-            AppendMenuW(hMenu, MF_STRING, 3, L"Remove Limits");
-            AppendMenuW(hMenu, MF_STRING, 4, L"Block Process");
+            AppendMenuW(hMenu, MF_STRING, 3, T(GUI_MENU_REMOVE_LIMITS));
+            AppendMenuW(hMenu, MF_STRING, 4, T(GUI_MENU_BLOCK_PROCESS));
             AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-            AppendMenuW(hMenu, MF_STRING, 10, L"Set Quota In...");
-            AppendMenuW(hMenu, MF_STRING, 11, L"Set Quota Out...");
-            AppendMenuW(hMenu, MF_STRING, 12, L"Remove Quotas");
+            AppendMenuW(hMenu, MF_STRING, 10, T(GUI_MENU_SET_QUOTA_IN));
+            AppendMenuW(hMenu, MF_STRING, 11, T(GUI_MENU_SET_QUOTA_OUT));
+            AppendMenuW(hMenu, MF_STRING, 12, T(GUI_MENU_REMOVE_QUOTAS));
             // Schedule (sticky processes only, group row only)
             //if (!is_sub && proc->is_sticky) {
             if (!is_sub && proc->pid_count > 1) {
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
-                AppendMenuW(hMenu, MF_STRING, 20, L"Set Schedule...");
+                AppendMenuW(hMenu, MF_STRING, 20, T(GUI_MENU_SET_SCHEDULE));
                 if (!schedule_is_empty(&proc->schedule))
-                    AppendMenuW(hMenu, MF_STRING, 21, L"Remove Schedule");
+                    AppendMenuW(hMenu, MF_STRING, 21, T(GUI_MENU_REMOVE_SCHEDULE));
             }
             if (!is_sub && proc->pid_count > 1) {
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
                 AppendMenuW(hMenu, MF_STRING, 5,
-                            proc->expanded ? L"Collapse PIDs" : L"Expand PIDs");
+                            proc->expanded ? T(GUI_MENU_COLLAPSE_PIDS) : T(GUI_MENU_EXPAND_PIDS));
             }
             // Sticky toggle
             AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
             if (proc->is_sticky) {
-                AppendMenuW(hMenu, MF_STRING, 6, L"Remove sticky entry");
+                AppendMenuW(hMenu, MF_STRING, 6, T(GUI_MENU_REMOVE_STICKY));
             } else {
                 wchar_t menuText[64];
-                swprintf(menuText, 64, L"Pin as sticky %s", MARKER_GHOST);
+                swprintf(menuText, 64, T(GUI_MENU_PIN_STICKY), MARKER_GHOST);
                 AppendMenuW(hMenu, MF_STRING, 7, menuText);
             }
 
@@ -2261,8 +2513,8 @@ void CellEdit_Commit(void) {
         } else if (mb > 1e12) {
             LeaveCriticalSection(&g_app.process_lock);
             MSGBOX(hParent, 
-                        L"Quota value too large (max 1 PB)", 
-                        L"Invalid Input", MB_OK | MB_ICONWARNING);
+                        T(GUI_CELL_LARGE_QUOTA), 
+                        T(GUI_CELL_INVALID_INPUT), MB_OK | MB_ICONWARNING);
             return;
         } else {
             new_quota = ParseQuotaInput(buf);
@@ -2390,6 +2642,41 @@ int CompareProcessEntry(const void* a, const void* b) {
     const ProcessEntry* pa = (const ProcessEntry*)a;
     const ProcessEntry* pb = (const ProcessEntry*)b;
     return _wcsicmp(pa->name, pb->name);
+}
+
+void RefreshProcessListColumns(void) {
+    if (!g_app.hProcessList) return;
+
+    LVCOLUMNW lvc = {0};
+    lvc.mask = LVCF_TEXT;
+    wchar_t header_text[64];
+    const wchar_t* col_names[] = {
+        T(GUI_COL_PROCESS), T(GUI_COL_PID), T(GUI_COL_DOWNLOAD), T(GUI_COL_UPLOAD),
+        T(GUI_COL_DL_LIMIT), T(GUI_COL_UL_LIMIT), T(GUI_COL_QUOTA_IN), T(GUI_COL_QUOTA_OUT),
+        T(GUI_COL_SCHEDULE), T(GUI_COL_ACTIONS)
+    };
+
+    for (int i = 0; i < ListView_ColumnCount; i++) {
+        if (i == g_app.sort_column) {
+            swprintf(header_text, 64, L"%s %s", col_names[i],
+                    g_app.sort_ascending ? UP_ARROW : DOWN_ARROW);
+            lvc.pszText = header_text;
+        } else {
+            lvc.pszText = (LPWSTR)col_names[i];
+        }
+        ListView_SetColumn(g_app.hProcessList, i, &lvc);
+    }
+
+    // Refresh the display with new sort order
+    RebuildDisplayRows();
+    InvalidateRect(g_app.hProcessList, NULL, FALSE);
+
+    // Update status bar
+    wchar_t status[128];
+    swprintf(status, 128, T(GUI_SORT_STATUS),
+            col_names[g_app.sort_column],
+            g_app.sort_ascending ? T(GUI_SORT_ASCENDING) : T(GUI_SORT_DESCENDING));
+    SendMessage(g_app.hStatusBar, SB_SETTEXT, 0, (LPARAM)status);
 }
 
 // Unused function

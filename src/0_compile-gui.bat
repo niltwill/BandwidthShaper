@@ -5,13 +5,13 @@ setlocal
 set VS_VER=0
 
 :: Files to compile
-set FILES=gui_main.c gui_utils.c gui_proc_list.c gui_dialogs.c args_parser.c shaper_core.c shaper_utils.c schedule.c token_bucket.c pid_cache.c
+set FILES=localization_api.c localization_data.c gui_main.c gui_utils.c gui_proc_list.c gui_dialogs.c args_parser.c shaper_core.c shaper_utils.c schedule.c token_bucket.c pid_cache.c
 
 :: Linker settings
 set LINKER=ws2_32.lib Advapi32.lib Kernel32.lib User32.lib iphlpapi.lib gdi32.lib shell32.lib comctl32.lib comdlg32.lib ole32.lib version.lib uxtheme.lib
 
 :: Compile flags
-set COMPILE_FLAGS=-DCLI_APP_BUILD=0
+set COMPILE_FLAGS=-DCLI_APP_BUILD=0 -DUNICODE /D_UNICODE /utf-8
 
 :: WinDivert libs
 set WINDIVERT_X86=external\lib\X86\WinDivert.lib
@@ -49,7 +49,7 @@ if %ERRORLEVEL% neq 0 (
 
 cl /EHsc /std:c17 /TC ^
     %COMPILE_FLAGS% ^
-    /DUNICODE /D_UNICODE %FILES% ^
+    %FILES% ^
     /link /out:%REL_X86% ^
     %WINDIVERT_X86% %LINKER% ^
     resource.res
@@ -80,7 +80,7 @@ if %ERRORLEVEL% neq 0 (
 
 cl /EHsc /std:c17 /TC ^
     %COMPILE_FLAGS% ^
-    /DUNICODE /D_UNICODE %FILES% ^
+    %FILES% ^
     /link /out:%REL_X64% ^
     %WINDIVERT_X64% %LINKER% ^
     resource.res
@@ -111,7 +111,7 @@ if %ERRORLEVEL% neq 0 (
 
 cl /EHsc /std:c17 /TC ^
     %COMPILE_FLAGS% ^
-    /DUNICODE /D_UNICODE %FILES% ^
+    %FILES% ^
     /link /out:%REL_ARM64% ^
     %WINDIVERT_ARM64% %LINKER% ^
     resource.res

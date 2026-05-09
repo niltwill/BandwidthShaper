@@ -2,6 +2,7 @@
 // Token bucket rate limiter implementation.
 
 #include "token_bucket.h"
+#include "localization_api.h"
 
 // --------------------------------------------------------------------------
 // Public API
@@ -96,7 +97,7 @@ bool token_bucket_consume(TokenBucket *bucket, int packet_size) {
     if (!bucket || packet_size <= 0) return false;
 
     if ((size_t)packet_size > (size_t)INT_MAX / 2) {
-        fprintf(stderr, "Error: Packet size too large for token bucket: %d\n", packet_size);
+        fprintf(stderr, C(CLI_ERR_TOKEN_B_SIZE), packet_size);
         return false;
     }
 

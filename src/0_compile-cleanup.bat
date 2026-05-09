@@ -17,3 +17,7 @@ if exist "token_bucket.obj" ( del /Q "token_bucket.obj" )
 if exist "pid_cache.obj" ( del /Q "pid_cache.obj" )
 if exist "schedule.obj" ( del /Q "schedule.obj" )
 if exist "resource.res" ( del /Q "resource.res" )
+
+:: Language
+if exist "localization_api.obj" ( del /Q "localization_api.obj" )
+if exist "localization_data.obj" ( del /Q "localization_data.obj" )

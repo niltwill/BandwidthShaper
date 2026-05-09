@@ -5,6 +5,7 @@
 #include "gui_proc_list.h"
 #include "gui_dialogs.h"
 #include "resource.h"
+#include "localization_api.h"
 #include "external/UAHMenuBar.h"
 #include <objbase.h>
 
@@ -150,7 +151,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmdLine, int nCmd
         // Already initialized with different mode - continue but don't uninitialize
         comInitialized = false;
     } else {
-        MSGBOX(NULL, L"Failed to initialize COM", L"Error", MB_OK);
+        MSGBOX(NULL, T(GUI_ERR_COM_INIT), T(S_ERROR), MB_OK);
         return 1;
     }
 
@@ -170,17 +171,15 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmdLine, int nCmd
     // Check for admin privileges
     if (!IsUserAdmin()) {
         int result = MSGBOX(NULL,
-            L"This program requires administrator privileges to work.\n\n"
-            L"Would you like to try to elevate it?",
-            L"Administrator Rights Required",
+            T(GUI_ADMIN_REQUIRED_MSG),
+            T(GUI_ADMIN_REQUIRED_CAP),
             MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON1);
 
         if (result == IDYES) {
             if (!RelaunchAsAdmin()) {
                 MSGBOX(NULL,
-                    L"Failed to obtain administrator privileges.\n"
-                    L"The program will now exit.",
-                    L"Error",
+                    T(GUI_ADMIN_FAILED_MSG),
+                    T(S_ERROR),
                     MB_OK | MB_ICONERROR);
                 CloseHandle(hMutex);
                 return 1;
@@ -219,7 +218,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmdLine, int nCmd
         wc.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
 
     if (!RegisterClassExW(&wc)) {
-        MSGBOX(NULL, L"Failed to register window class", L"Error", MB_OK);
+        MSGBOX(NULL, T(GUI_ERR_WNDCLASS), T(S_ERROR), MB_OK);
         return 1;
     }
 
@@ -233,7 +232,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmdLine, int nCmd
     );
 
     if (!hWnd) {
-        MSGBOX(NULL, L"Failed to create window", L"Error", MB_OK);
+        MSGBOX(NULL, T(GUI_ERR_CREATE_WND), T(S_ERROR), MB_OK);
         return 1;
     }
 
