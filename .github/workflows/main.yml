@@ -1,0 +1,51 @@
+name: Build BandwidthShaper
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Create release output directories
+      working-directory: src
+      shell: cmd
+      run: |
+        mkdir release\CLI\x86 release\CLI\x64 release\CLI\arm64
+        mkdir release\GUI\x86 release\GUI\x64 release\GUI\arm64
+
+    - name: Build CLI app
+      working-directory: src
+      shell: cmd
+      run: call 0_compile-cli.bat
+
+    - name: Build GUI app
+      working-directory: src
+      shell: cmd
+      run: call 0_compile-gui.bat
+
+    - name: Clean intermediate files
+      working-directory: src
+      shell: cmd
+      run: call 0_compile-cleanup.bat
+
+    - name: Upload CLI artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: BandwidthShaper-CLI
+        path: src/release/CLI/
+
+    - name: Upload GUI artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: BandwidthShaper-GUI
+        path: src/release/GUI/
