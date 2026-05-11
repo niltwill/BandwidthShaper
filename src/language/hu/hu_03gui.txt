@@ -1,0 +1,312 @@
+"Nem sikerült a COM elindítása",
+"Ez a program adminisztrátori jogosultságot igényel a futtatásához.\n\n"
+"Megpróbálod lekérni most ezt a jogosultságot?",
+"Admin jogosultság szükséges",
+"Nem sikerült az admin jogosultság megszerzése.\n"
+"A program most leáll.",
+"Nem sikerült az osztályszintű ablak regisztrálása",
+"Nem sikerült a ablak létrehozása",
+
+"Folyamat",
+"PID",
+"Letöltés",
+"Feltöltés",
+"LE. korlát",
+"FEL. korlát",
+"Kvóta Be.",
+"Kvóta Ki.",
+"Ütemezés",
+"Esemény",
+"Figyelmeztetés: A folyamat több mint %u példányban fut, némely mellőzésre került\n",
+"%d folyamat (%d példány)",
+"Kvóta beállítása",
+"A kvótát csak a folyamatcsoport szintjén lehet beállítani, nem lehet egyéni PID-re.",
+"Futtatható állomány (*.exe)\0*.exe\0Minden fájl (*.*)\0*.*\0",
+"Futtatható folyamat tallózása",
+"Folyamat tallózása",
+"A ragadós folyamat listája megtelt (max %d).",
+"Ragadós bejegyzés hozzáadva: %s",
+"Folyamat meghatározása",
+"Ragadós bejegyzés eltálvolítása",
+"A kiválasztott folyamat nem ragacsos bejegyzés.\n\n"
+"Kattints jobb gombbal egy futó folyamatra és válaszd a \x201CRagacsos folyamattá tétel \u25CC\x201D "
+"lehetőséget hogy állandósítsd, vagy használd a Fájl \x203A Folyamat tallózása / meghatározása menüpontot.",
+"Eltávolítod a ragacsos bejegyzést ettől: \"%s\"?\n\n"
+"A mentett korlátok érvénytelenné válnak. "
+"Ha a folyamat éppen fut, akkor a listában marad, amíg ki nem lép.",
+"Rendezve a %s által (%s)",
+"emelkedő",
+"csökkenő",
+"%d példány",
+"Blokkolt",
+"[Korlátozott]",
+"Letöltési korlát beállítása...",
+"Feltöltési korlát beállítása...",
+"Korlátozások megszüntetése",
+"Folyamat blokkolása",
+"Beérkező kvóta beállítása...",
+"Kimenő kvóta beállítása...",
+"Kvóták törlése",
+"Ütemezés beállítása...",
+"Ütemezés eltávolítása",
+"PID-ek összecsukása",
+"PID-ek kibontása",
+"Ragacsos bejegyzés eltávolítása",
+"Ragacsos folyamattá tétel %s",
+"Érvénytelen bemenet",
+"A kvótaérték túl nagy (max 1 PB)",
+
+"Indítás",
+"Leállítás",
+"Újratöltés",
+"Készen áll",
+"Konfiguráció szükséges",
+"Nincs hálózati interfész kiválasztva.\n\n"
+"Kérlek menj a Nézet > Beállítások menübe és válassz ki legalább egy hálózati interfészt.",
+"Nem sikerült a korlátozó példány létrehozása",
+"Nem sikerült a korlátozó elindítása: %s",
+"\r\n*** KVÓTÁT ELÉRŐ FOLYAMATOK ***\r\n",
+" (BE)",
+" (KI)",
+"--- Munkamenet véget ért (statisztika befagyasztva) ---\r\n"
+"Feldolgozott csomagok:   %llu\r\n"
+"Eldobottak (sebesség):   %llu\r\n"
+"Eldobottak (veszteség):  %llu\r\n"
+"Késleltetettek:          %llu\r\n"
+"Helytelenek:             %llu\r\n"
+"\r\n"
+"Összes bájt:             %llu (%.2f MB)\r\n"
+"Letöltési bájt:          %llu (%.2f MB)\r\n"
+"Feltöltési bájt:         %llu (%.2f MB)\r\n"
+"%s%s%s",
+"\r\n*** ADATKERET ELÉRVE ***",
+"Elrejtés",
+"Mutatás",
+"Statisztika",
+"Kilépés",
+"A mentett NIC nem található: '%s' - ellenőrizd a Beállításokban",
+"Nincs IP",
+"A programról",
+"BandwidthShaper %s\nFejlett forgalomkorlátozó\n\nKészítette: niltwill\nhttps://github.com/niltwill/BandwidthShaper",
+"A korlátozó fut",
+"Leállt",
+"A konfiguráció újratöltve",
+"A (tartalék) konfiguráció újratöltve",
+"Újratöltés sikertelen: %s",
+"Újratöltési hiba",
+
+"A legnagyobb beérkező sávszélesség minden folyamat számára.\n"
+"0 = nincs globális korlát (a folyamatszintű korlátozások érvényben maradnak).",
+"A legnagyobb kimenő sávszélesség minden folyamat számára.\n"
+"0 = nincs globális korlát (a folyamatszintű korlátozások érvényben maradnak).",
+"A belső csomag puffer mérete a beérkező forgalom számára, bájtban."
+" A nagyobb érték kisimítja a 'burst' forgalmat, de\n"
+"növeli a memória használatát.\n"
+"Tipikus tartomány: 65536 - 524288.",
+"A belső csomag puffer mérete a kimenő forgalom számára, bájtban."
+" A nagyobb érték kisimítja a 'burst' forgalmat, de\n"
+"növeli a memória használatát.\n"
+"Tipikus tartomány: 65536 - 524288.",
+"A legnagyobb bájtmennyiség, amit egy folyamat küldhet egy menetben, mielőtt beüt a korlátozás.\n"
+"0 = automatikusan kiszámításra kerül az aktív korlátozás által.\n"
+"Növeld meg ezt ha a korlátozott kapcsolat szakadozik;\n"
+"csökkensd, ha szigorúbb tempót akarsz előírni.",
+"Milyen gyakran értékelje át a korlátozó a forgalmat és alkalmazza a korlátozásokat.\n"
+"Csomag mód: ennyi csomag átvétele után frissül.\n"
+"Ezredmásodperc mód: ennyi ms után frissül.\n"
+"Alacsonyabb = jobb reakció, de magasabb processzor használatot igényel.",
+"A forgalom frissítését a megadott számú csomag átvétele után csinálja."
+" Jó a magas értékű csomagoknál (játék, VoIP).",
+"A forgalom frissítését meghatározott időközönként csinálja.\n"
+"Jó az ömlesztett átvitelnél (letöltések, streamelés).",
+"Minimum idő ezredmásodpercben aminek el kell telnie két egymás utáni "
+"forgalom frissítésénél, az időköz beállítás mellett. "
+"Megakadályozza a csomagok vergődését mikor túl sok kis csomag érkezik egyszerre.",
+"Munkamenet-szint adatkeret megabájtban. Miután a teljes forgalom (be + ki)"
+"meghaladja ezt az értéket, a korlátozó minden\n"
+"további forgalmat blokkol.\n"
+"0 = nincs keret. Alaphelyzetbe áll mikor a korlátozó leáll és újraindul.",
+"Egyidejűleg engedélyezett maximális TCP kapcsolatok száma folyamatonként. "
+"Ezen a korláton túl az új kapcsolatok eldobásra kerülnek.\n"
+"0 = nincs kapcsolatkorlátozás.",
+"Egyidejűleg engedélyezett UDP kapcsolatok száma folyamatonként. "
+"Ezen a korláton túl az új kapcsolatok eldobásra kerülnek.\n"
+"0 = nincs kapcsolatkorlátozás.",
+"Mesterséges késleltetést ad hozzá minden csomaghoz, ezredmásodpercben."
+" Hasznos az alkalmazás teszteléséhez magas-késleltetésű környezetekben.\n"
+"0 = nincs hozzáadott késleltetés.",
+"Mekkora százalékú csomagot dobjon el véletlenszerűen (0.00 - 100.00)."
+" Egy megbízhatatlan hálózati kapcsolatot szimulál.\n"
+"0 = nincs csomagveszteség.",
+"A prioritás, amit a WinDivert számára állít be (-30000 a legalacsonyabb, és 30000 a legnagyobb). "
+"A negatív érték jobban háttérbe helyezi a forgalmat; a pozitív érték priorizálja.\n"
+"-30000 = legalacsonyabb, -15000 = alacsony, 0 = normál,\n"
+"15000 = magas, 30000 = legmagasabb.",
+"Válassz ki egy vagy több hálózati adaptert a monitorozáshoz és korlátozáshoz."
+" A lista hozzáférhetetlen míg a korlátozó fut.",
+"A lekicsinyítéskor elrejti az ablakot az értesítési területre. "
+"Kattints kétszer a tálcaikonra a helyreállításhoz.",
+"Elment minden jelenlegi beállítást a BandwidthShaper.cfg fájlba\n"
+"mikor a program kilép, és újratölti ezt a következő indításnál.",
+"Elmenti a ragadós folyamat listát (a rögzített folyamatokat\n"
+"és korlátjaikat) a BandwidthShaper.cfg fájlba kilépésnél, és helyreállítja a"
+"következő indításnál.\n"
+"Ez igényli az 'Emlékezzen a beállításokra kilépéskor' opció bejelölését is.",
+"A konfig fájlt erre a helyre mentse mikor a program kilép,\n"
+"és ezt az útvonalat használja a betöltéshez következő indításnál.",
+"A statisztikai pillanatképeket erre a helyre mentse el,\n"
+"az EXE fájllal megegyező könyvtár helyett.",
+"Változtasd meg a program nyelvét.",
+"A konfig újratöltése sikertelen: %s",
+"Válassz könyvtárat a konfig fájlnak (BandwidthShaper.cfg):",
+"Válassz könyvtárat a CSV pillanatkép mentéséhez:",
+"Bemenő Adat",
+"Kimenő Adat",
+"Statisztika mentése",
+"Feldolgozott csomagok:    %I64u\r\n"
+"Eldobottak (sebesség):    %I64u\r\n"
+"Eldobottak (veszteség):   %I64u\r\n"
+"Késleltetettek:           %I64u\r\n"
+"Érvénytelenek:            %I64u\r\n"
+"\r\n"
+"Minden bájt:              %I64u (%.2f MB)\r\n"
+"Letöltött bájt:           %I64u (%.2f MB)\r\n"
+"Feltöltött bájt:          %I64u (%.2f MB)\r\n"
+"\r\n"
+"Jelenlegi sebesség:       %.2f / %.2f KB/s\r\n"
+"%s%s%s",
+"Kérlek adj meg egy folyamatot.",
+"(nincs ütemezés - a szabályok mindig aktívak)",
+"Ütemező - %s",
+"Idő",
+"(24ó)",
+"Hét napja",
+"Hé",
+"Ke",
+"Sze",
+"Csü",
+"Pé",
+"Szo",
+"Va",
+"Az ütemzésen kívül, minden szabály felfüggesztésre kerül ennél a folyamatnál.",
+"Alapállapot",
+"OK",
+"Mégsem",
+"Helytelen ütemező",
+"A kezdet és befejezés ideje megegyezik.\n"
+"Kérlek egy érvényes idősávot adj meg, vagy mellőzd az Idő opciót.",
+"Nincs kiválasztva egy nap a hétből.\n"
+"Kérlek válassz ki legalább egy napot, vagy mellőzd a Hét napja opciót.",
+"Nem sikerült a CSV fájl létrehozása.\n"
+"Győződj meg róla, hogy az alkalmazásnak van írási jogosultsága a könyvtárhoz.",
+"BandwidthShaper Statisztika\n",
+"Generálva,%04u-%02u-%02u %02u:%02u:%02u\n\n",
+"Folyamatszintű Forgalom\n",
+"Folyamat,Leírás,Bejövő Adat (MB),Kimenő Adat (MB),Összesen (MB),Bejövő Kvóta (MB),Kimenő Kvóta (MB),Kimerített Kvóta\n",
+"IGEN",
+"NEM",
+"(nincs feljegyzett forgalom)\n",
+"Munkamenet összegzés\n",
+"Feldolgozott csomagok,%llu\n",
+"Eldobottak (sebességkorlátozás),%llu\n",
+"Eldobottak (szim. veszteség),%llu\n",
+"Késleltetettek,%llu\n",
+"Érvénytelen csomagok,%llu\n",
+"Minden feldolgozott bájt,%llu\n",
+"Minden feldolgozott bájt (MB),%.3f\n",
+"Letöltött bájt (MB),%.3f\n",
+"Feltöltött bájt (MB),%.3f\n",
+"Adatkeret elérve,IGEN\n",
+"\nKimerített kvóta folyamatok\n",
+"Folyamat,Kvóta Típus,Kvóta (MB),Elhasznált (MB)\n",
+"\"%s\",BE,%.3f,%.3f\n",
+"\"%s\",KI,%.3f,%.3f\n",
+"(a korlátozó még nem állt le - nem érhető el végleges összegzés)\n",
+"A statisztika mentésre került itt:\n%s",
+
+"&Fájl",
+"&Folyamat tallózása...\t(Alt+L)",
+"F&olyamat meghatározása...\t(Alt+P)",
+"&Ragadós bejegyzés eltávolítása\t(Alt+R)",
+"&Kilépés\t(Alt+F4)",
+"&Nézet",
+"&Folyamatok frissítése\t(F5)",
+"Az összes &kibontása\t(Alt++)",
+"Az összes &összecsukása\t(Alt+-)",
+"F&rekvencia frissítése",
+"&Gyakran (1 mp)",
+"&Rendszeresen (2 mp)",
+"&Lassabban (15 mp)",
+"&Néha (45 mp)",
+"&Ritkán (2 perc)",
+"&Kikapcsolva",
+"F&olyamatok",
+"&Összes mutatása\t(Alt+A)",
+"Csak a &ragadós folyamatok mutatása\t(Alt+S)",
+"Csak a &futó folyamatok mutatása\t(Alt+C)",
+"&Beállítások\t(Ctrl+O)",
+"&Statisztika\t(Ctrl+S)",
+"&Segítség",
+"&A programról",
+
+"Beállítások",
+"Globális sávszél-korlátozások",
+"Letöltés:",
+"KB/s (0 = korlátlan)",
+"Feltöltés:",
+"KB/s (0 = korlátlan)",
+"Adatkeret:",
+"MB (0 = korlátlan)",
+"Hálózati interfészek",
+"Kiválasztott NIC(ek):",
+"Puffer beállítások",
+"Letöltési puffer:",  
+"bájt",
+"Feltöltési puffer:",
+"Burst méret:",
+"bájt (0 = auto)",
+"Folyamat frissítési időköz",
+"Frissítsen minden:",
+"csomag után",
+"ezredmp. után",
+"Nyugvó állapot:",
+"ms",
+"Haladó",
+"TCP csat. korlát:",
+"(0 = korlátlan)",
+"UDP csat. korlát:",
+"(0 = korlátlan)",
+"Késleltetés:",
+"Csomagveszteség:",
+"%",
+"Prioritás:",
+"Nyelv",
+"Jelenlegi nyelv:",
+"Viselkedés",
+"Az értesítési területre kicsinyítsen",
+"Emlékezzen a beállításokra kilépéskor",
+"Emlékezzen a ragadós folyamatokra kilépéskor",
+"Elérési útvonalak",
+"Konfig könyvtár:",
+"(üres = ugyanott ahol a futtatható állomány van)",
+"Pillanatkép könyvtár:",
+"(üres = ugyanott ahol a futtatható állomány van)",
+"OK",
+"Mégsem",
+
+"Folyamat meghatározása",
+"Folyamatnév (az .exe nélkül):",
+"Hozzáadás",
+
+"Statisztika - BandwidthShaper",
+"Letöltési előzmény",
+"Feltöltési előzmény",
+"Folyamatszintű forgalom",
+"Statisztika:",
+"&Statisztika mentése",
+"&Statisztika visszaállítása",
+"&Bezárás",
+
+"Angol",
+"Magyar",
+"Ismeretlen",

@@ -1,9 +1,6 @@
 @echo off
 setlocal
 
-:: Detect VS version (TODO: add /wd5105 for VS 2019)
-set VS_VER=0
-
 :: Files to compile
 set FILES=localization_api.c localization_data.c cli_main.c args_parser.c shaper_core.c shaper_utils.c schedule.c token_bucket.c pid_cache.c
 
@@ -27,19 +24,17 @@ set REL_ARM64=release\CLI\arm64\BandwidthShaper.exe
 :: CLI
 :: --------------------------------
 
-:: X86
-if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars32.bat" (
-    set VS_VER=2022
-    call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars32.bat"
-) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars32.bat" (
-    set VS_VER=2019
-    call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars32.bat"
+:: Pre-generate the language file
+python localization_generate.py
+if %ERRORLEVEL% neq 0 (
+    echo ERROR: Failed to generate localization_data.c
+    pause & exit /b %ERRORLEVEL%
 )
 
-if not defined VSINSTALLDIR (
-    echo ERROR: Visual Studio not found.
-    pause & exit /b 1
-)
+:: X86
+for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VS_INSTALL=%%i
+if not defined VS_INSTALL ( echo ERROR: Visual Studio not found. & pause & exit /b 1 )
+call "%VS_INSTALL%\VC\Auxiliary\Build\vcvars32.bat"
 
 rc /fo resource.res resource_cli.rc
 if %ERRORLEVEL% neq 0 (
@@ -59,18 +54,9 @@ if %ERRORLEVEL% neq 0 (
 )
 
 :: X64
-if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" (
-    set VS_VER=2022
-    call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul
-) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat" (
-    set VS_VER=2019
-    call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars64.bat" >nul
-)
-
-if not defined VSINSTALLDIR (
-    echo ERROR: Visual Studio not found.
-    pause & exit /b 1
-)
+for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VS_INSTALL=%%i
+if not defined VS_INSTALL ( echo ERROR: Visual Studio not found. & pause & exit /b 1 )
+call "%VS_INSTALL%\VC\Auxiliary\Build\vcvars64.bat" >nul
 
 rc /fo resource.res resource.rc
 if %ERRORLEVEL% neq 0 (
@@ -90,18 +76,9 @@ if %ERRORLEVEL% neq 0 (
 )
 
 :: ARM64
-if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" (
-    set VS_VER=2022
-    call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" amd64_arm64
-) else if exist "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvarsall.bat" (
-    set VS_VER=2019
-    call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvarsall.bat" amd64_arm64
-)
-
-if not defined VSINSTALLDIR (
-    echo ERROR: Visual Studio not found.
-    pause & exit /b 1
-)
+for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VS_INSTALL=%%i
+if not defined VS_INSTALL ( echo ERROR: Visual Studio not found. & pause & exit /b 1 )
+call "%VS_INSTALL%\VC\Auxiliary\Build\vcvarsall.bat" amd64_arm64
 
 rc /fo resource.res resource.rc
 if %ERRORLEVEL% neq 0 (
