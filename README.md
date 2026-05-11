@@ -1,5 +1,7 @@
 # BandwidthShaper
 
+[![Build Status](https://github.com/niltwill/BandwidthShaper/actions/workflows/main.yml/badge.svg)](https://github.com/niltwill/BandwidthShaper/actions)
+
 ## Description
 This is a small, portable tool to limit bandwidth in Windows. Available for both 32-bit and 64-bit systems.
 
