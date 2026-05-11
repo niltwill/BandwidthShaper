@@ -23,6 +23,16 @@ jobs:
         mkdir release\CLI\x86 release\CLI\x64 release\CLI\arm64
         mkdir release\GUI\x86 release\GUI\x64 release\GUI\arm64
 
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+
+    - name: Generate localization data
+      working-directory: src
+      shell: cmd
+      run: python localization_generate.py
+
     - name: Build CLI app
       working-directory: src
       shell: cmd
