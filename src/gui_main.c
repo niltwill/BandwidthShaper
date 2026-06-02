@@ -168,6 +168,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmdLine, int nCmd
         return 0;
     }
 
+    // Load the user's preferred language before admin privilege request
+    Localization_EarlyInit();
+
     // Check for admin privileges
     if (!IsUserAdmin()) {
         int result = MSGBOX(NULL,

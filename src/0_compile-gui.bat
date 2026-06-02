@@ -10,7 +10,7 @@ call :setvars
 python localization_generate.py
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Failed to generate localization_data.c
-    pause & exit /b %ERRORLEVEL%
+    exit /b %ERRORLEVEL%
 )
 
 :: X86
@@ -21,7 +21,7 @@ call "%VS_INSTALL%\VC\Auxiliary\Build\vcvars32.bat"
 rc /fo resource.res resource.rc
 if %ERRORLEVEL% neq 0 (
     echo ERROR: rc.exe failed. Fix resource.rc before linking.
-    pause & exit /b %ERRORLEVEL%
+    exit /b %ERRORLEVEL%
 )
 
 cl /EHsc /std:c17 /TC ^
@@ -32,7 +32,7 @@ cl /EHsc /std:c17 /TC ^
     resource.res
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Compilation failed.
-    pause & exit /b %ERRORLEVEL%
+    exit /b %ERRORLEVEL%
 )
 
 :: Reset PATH for next arch
@@ -47,7 +47,7 @@ call "%VS_INSTALL%\VC\Auxiliary\Build\vcvars64.bat" >nul
 rc /fo resource.res resource.rc
 if %ERRORLEVEL% neq 0 (
     echo ERROR: rc.exe failed. Fix resource.rc before linking.
-    pause & exit /b %ERRORLEVEL%
+    exit /b %ERRORLEVEL%
 )
 
 cl /EHsc /std:c17 /TC ^
@@ -58,7 +58,7 @@ cl /EHsc /std:c17 /TC ^
     resource.res
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Compilation failed.
-    pause & exit /b %ERRORLEVEL%
+    exit /b %ERRORLEVEL%
 )
 
 :: Reset PATH for next arch
@@ -73,7 +73,7 @@ call "%VS_INSTALL%\VC\Auxiliary\Build\vcvarsall.bat" amd64_arm64
 rc /fo resource.res resource.rc
 if %ERRORLEVEL% neq 0 (
     echo ERROR: rc.exe failed. Fix resource.rc before linking.
-    pause & exit /b %ERRORLEVEL%
+    exit /b %ERRORLEVEL%
 )
 
 cl /EHsc /std:c17 /TC ^
@@ -84,7 +84,7 @@ cl /EHsc /std:c17 /TC ^
     resource.res
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Compilation failed.
-    pause & exit /b %ERRORLEVEL%
+    exit /b %ERRORLEVEL%
 )
 
 :setvars
@@ -95,7 +95,7 @@ set FILES=localization_api.c localization_data.c gui_main.c gui_utils.c gui_proc
 set LINKER=ws2_32.lib Advapi32.lib Kernel32.lib User32.lib iphlpapi.lib gdi32.lib shell32.lib comctl32.lib comdlg32.lib ole32.lib version.lib uxtheme.lib
 
 :: Compile flags
-set COMPILE_FLAGS=-DCLI_APP_BUILD=0 -DUNICODE /D_UNICODE /utf-8
+set COMPILE_FLAGS=/DCLI_APP_BUILD=0 /DUNICODE /D_UNICODE /utf-8
 
 :: WinDivert libs
 set WINDIVERT_X86=external\lib\X86\WinDivert.lib

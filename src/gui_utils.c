@@ -1786,6 +1786,70 @@ void Settings_Load(void) {
     g_app.sort_ascending = (buf[0] != L'0');
 }
 
+// Early language initialization
+// Returns true if language was successfully loaded, false on error (but still sets default)
+void Localization_EarlyInit(void) {
+    wchar_t default_path[MAX_PATH];
+    wchar_t exe_dir[MAX_PATH];
+    wchar_t config_dir[MAX_PATH] = {0};
+    wchar_t snapshot_dir[MAX_PATH] = {0};
+    wchar_t auth_path[MAX_PATH];
+
+    // Get exe directory
+    GetModuleFileNameW(NULL, exe_dir, MAX_PATH);
+    wchar_t* sep = wcsrchr(exe_dir, L'\\');
+    if (sep) *(sep + 1) = L'\0';
+
+    // Read from default location to get ConfigDir
+    swprintf(default_path, MAX_PATH, L"%sBandwidthShaper.cfg", exe_dir);
+    GetPrivateProfileStringW(L"Settings", L"ConfigDir", L"", config_dir, MAX_PATH, default_path);
+    GetPrivateProfileStringW(L"Settings", L"SnapshotDir", L"", snapshot_dir, MAX_PATH, default_path);
+
+    // Step 3: Determine authoritative config path
+    if (config_dir[0] != L'\0') {
+        // Resolve full path (without creating directories)
+        wchar_t full[MAX_PATH];
+        if (GetFullPathNameW(config_dir, MAX_PATH, full, NULL) && full[0] != L'\0') {
+            DWORD attr = GetFileAttributesW(full);
+            if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
+                // Directory exists
+                size_t len = wcslen(full);
+                if (len > 0 && full[len-1] != L'\\' && full[len-1] != L'/') {
+                    if (len + 2 < MAX_PATH) { full[len] = L'\\'; full[len+1] = L'\0'; }
+                }
+                swprintf(auth_path, MAX_PATH, L"%sBandwidthShaper.cfg", full);
+            } else {
+                // Directory doesn't exist - fall back to exe dir
+                wcsncpy(auth_path, default_path, MAX_PATH);
+            }
+        } else {
+            wcsncpy(auth_path, default_path, MAX_PATH);
+        }
+    } else {
+        wcsncpy(auth_path, default_path, MAX_PATH);
+    }
+
+    // If auth_path differs from default, re-read ConfigDir from there
+    if (_wcsicmp(auth_path, default_path) != 0) {
+        wchar_t new_config_dir[MAX_PATH] = {0};
+        GetPrivateProfileStringW(L"Settings", L"ConfigDir", L"", new_config_dir, MAX_PATH, auth_path);
+        if (new_config_dir[0] != L'\0') {
+            wcsncpy(config_dir, new_config_dir, MAX_PATH - 1);
+        }
+    }
+
+    // Read language
+    wchar_t lang_buf[8] = {0};
+    GetPrivateProfileStringW(L"Settings", L"Language", L"0", lang_buf, 8, auth_path);
+    int lang_id = _wtoi(lang_buf);
+    if (lang_id >= 0 && lang_id < _LOC_LANG_COUNT) {
+        loc_set_language((LangId)lang_id);
+    } else {
+        // Fall back to default
+        loc_set_language(LOC_LANG_EN);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // NIC list
 // ---------------------------------------------------------------------------

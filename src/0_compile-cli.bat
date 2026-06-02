@@ -21,7 +21,7 @@ call "%VS_INSTALL%\VC\Auxiliary\Build\vcvars32.bat"
 rc /fo resource.res resource_cli.rc
 if %ERRORLEVEL% neq 0 (
     echo ERROR: rc.exe failed. Fix resource_cli.rc before linking.
-    pause & exit /b %ERRORLEVEL%
+    exit /b %ERRORLEVEL%
 )
 
 cl /EHsc /std:c17 /TC ^
@@ -32,7 +32,7 @@ cl /EHsc /std:c17 /TC ^
     resource.res
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Compilation failed.
-    pause & exit /b %ERRORLEVEL%
+    exit /b %ERRORLEVEL%
 )
 
 :: Reset PATH for next arch
@@ -58,7 +58,7 @@ cl /EHsc /std:c17 /TC ^
     resource.res
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Compilation failed.
-    pause & exit /b %ERRORLEVEL%
+    exit /b %ERRORLEVEL%
 )
 
 :: Reset PATH for next arch
@@ -84,7 +84,7 @@ cl /EHsc /std:c17 /TC ^
     resource.res
 if %ERRORLEVEL% neq 0 (
     echo ERROR: Compilation failed.
-    pause & exit /b %ERRORLEVEL%
+    exit /b %ERRORLEVEL%
 )
 
 :setvars
@@ -95,7 +95,7 @@ set FILES=localization_api.c localization_data.c cli_main.c args_parser.c shaper
 set LINKER=ws2_32.lib Advapi32.lib Kernel32.lib User32.lib iphlpapi.lib
 
 :: Compile flags
-set COMPILE_FLAGS=-DCLI_APP_BUILD=1 -DUNICODE /D_UNICODE /utf-8
+set COMPILE_FLAGS=/DCLI_APP_BUILD=1 /DUNICODE /D_UNICODE /utf-8
 
 :: WinDivert libs
 set WINDIVERT_X86=external\lib\X86\WinDivert.lib
